@@ -1,6 +1,8 @@
 import unittest
 from collections import defaultdict
 
+from fastapi.testclient import TestClient
+
 from main import app
 
 
@@ -15,6 +17,21 @@ class RouteRegistrationTest(unittest.TestCase):
         duplicates = {key: endpoints for key, endpoints in routes.items() if len(endpoints) > 1}
 
         self.assertEqual(duplicates, {}, f"duplicate routes shadow handlers: {duplicates}")
+
+
+class CorsTest(unittest.TestCase):
+    def test_projects_api_allows_vite_fallback_port(self):
+        client = TestClient(app)
+
+        response = client.options(
+            "/api/projects",
+            headers={
+                "Origin": "http://127.0.0.1:5176",
+                "Access-Control-Request-Method": "GET",
+            },
+        )
+
+        self.assertEqual(response.headers.get("access-control-allow-origin"), "http://127.0.0.1:5176")
 
 
 if __name__ == "__main__":
