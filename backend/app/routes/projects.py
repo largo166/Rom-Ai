@@ -3,7 +3,7 @@ import json
 from datetime import datetime
 
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
-from sqlalchemy import select
+from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
 
 from app import crud, models, schemas
@@ -14,7 +14,6 @@ from app.services import (
     SUPPORTED_PROJECT_EXTS,
     build_team_plan,
     call_deepseek_json,
-    default_meeting_agenda,
     delete_project_library,
     ensure_project_sidecars,
     mock_analysis_payload,
@@ -30,6 +29,7 @@ from app.services import (
     summarize_meeting,
     sync_tencent_meeting_minutes,
     team_requirements_from_payload,
+    TencentMinutesUnavailableError,
 )
 
 router = APIRouter(prefix="/api/projects", tags=["projects"])
@@ -430,11 +430,10 @@ def create_project_meeting(project_id: str, payload: schemas.ProjectMeetingCreat
     project = crud.get_project(db, project_id)
     if not project:
         raise HTTPException(status_code=404, detail="项目不存在")
-    agenda = payload.agenda or default_meeting_agenda(project)
     meeting = models.Meeting(
         project_id=project.id,
         title=payload.title,
-        agenda=agenda,
+        agenda=payload.agenda,
         recording_url=payload.meeting_link,
         transcript=payload.transcript,
         status=payload.status if payload.status != "planned" else "scheduled",
@@ -443,6 +442,28 @@ def create_project_meeting(project_id: str, payload: schemas.ProjectMeetingCreat
     db.commit()
     db.refresh(meeting)
     return meeting
+
+
+@router.delete("/{project_id}/meetings/{meeting_id}")
+def delete_project_meeting(project_id: str, meeting_id: str, db: Session = Depends(get_db)):
+    project = crud.get_project(db, project_id)
+    if not project:
+        raise HTTPException(status_code=404, detail="项目不存在")
+    meeting = db.get(models.Meeting, meeting_id)
+    if not meeting or meeting.project_id != project_id:
+        raise HTTPException(status_code=404, detail="会议不存在")
+
+    indexed_path = f"project-deposits/{project_id}/meetings/{meeting_id}.md"
+    knowledge_file = db.scalar(select(models.KnowledgeFile).where(models.KnowledgeFile.filepath == indexed_path))
+    if knowledge_file:
+        db.execute(delete(models.KnowledgeChunk).where(models.KnowledgeChunk.file_id == knowledge_file.id))
+        db.execute(delete(models.KnowledgeTag).where(models.KnowledgeTag.file_id == knowledge_file.id))
+        db.execute(delete(models.KnowledgeLink).where(models.KnowledgeLink.file_id == knowledge_file.id))
+        db.delete(knowledge_file)
+
+    db.delete(meeting)
+    db.commit()
+    return {"deleted": True, "deleted_meeting_id": meeting_id}
 
 
 @router.post("/{project_id}/meetings/tencent", response_model=schemas.ProjectMeetingOut)
@@ -469,7 +490,6 @@ def create_tencent_project_meeting(project_id: str, payload: schemas.TencentMeet
         link_lines.append(f"meeting_id：{tencent['meeting_id']}")
     if tencent.get("trace"):
         link_lines.append(f"X-Tc-Trace：{tencent['trace']}")
-    agenda = payload.agenda or default_meeting_agenda(project)
     meeting_date = None
     try:
         meeting_date = datetime.fromisoformat(start_time.replace("Z", "+00:00"))
@@ -479,7 +499,7 @@ def create_tencent_project_meeting(project_id: str, payload: schemas.TencentMeet
         project_id=project.id,
         title=payload.title,
         date=meeting_date,
-        agenda=agenda,
+        agenda=payload.agenda,
         recording_url="\n".join(link_lines),
         status="scheduled",
     )
@@ -499,12 +519,14 @@ def sync_tencent_project_meeting_minutes(project_id: str, meeting_id: str, db: S
         raise HTTPException(status_code=404, detail="会议不存在")
     try:
         return sync_tencent_meeting_minutes(db, meeting)
+    except TencentMinutesUnavailableError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     except Exception as exc:
         raise HTTPException(status_code=502, detail=f"同步腾讯会议纪要失败：{exc}") from exc
 
 
 @router.post("/{project_id}/meetings/{meeting_id}/summarize", response_model=schemas.ProjectMeetingOut)
-def summarize_project_meeting(
+async def summarize_project_meeting(
     project_id: str,
     meeting_id: str,
     payload: schemas.ProjectMeetingUpdate = schemas.ProjectMeetingUpdate(),
@@ -524,7 +546,10 @@ def summarize_project_meeting(
     for key, value in values.items():
         setattr(meeting, key, value)
     db.commit()
-    return summarize_meeting(db, meeting)
+    try:
+        return await summarize_meeting(db, meeting)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @router.get("/{project_id}/skill-cards", response_model=list[schemas.SkillCardOut])

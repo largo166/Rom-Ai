@@ -22,6 +22,11 @@ from app.config import settings
 
 TENCENT_MEETING_SCRIPT = Path.home() / ".codex" / "skills" / "tencent-meeting-mcp" / "scripts" / "tencent_meeting.py"
 
+
+class TencentMinutesUnavailableError(RuntimeError):
+    pass
+
+
 SUPPORTED_PROJECT_EXTS = {".pdf", ".docx", ".xlsx", ".txt", ".md", ".pptx", ".png", ".jpg", ".jpeg"}
 SUPPORTED_INBOX_EXTS = SUPPORTED_PROJECT_EXTS | {".zip", ".rar", ".7z", ".dwg", ".skp", ".rvt", ".csv", ".webp", ".mp3", ".m4a", ".wav", ".mp4"}
 SUPPORTED_KNOWLEDGE_EXTS = {".md", ".txt", ".pdf", ".docx", ".xlsx", ".pptx", ".png", ".jpg", ".jpeg"}
@@ -77,16 +82,148 @@ def parse_tencent_meeting_result(text: str) -> dict[str, str]:
     }
 
 
-def parse_tencent_record_result(text: str) -> dict[str, str]:
+def _load_tencent_json_payload(text: str) -> Any:
+    try:
+        outer = json.loads(text)
+    except json.JSONDecodeError:
+        return None
+    body = outer.get("body") if isinstance(outer, dict) else None
+    if isinstance(body, str):
+        try:
+            return json.loads(body)
+        except json.JSONDecodeError:
+            return outer
+    return outer
+
+
+def _tencent_response_error(text: str) -> str:
+    try:
+        payload = json.loads(text)
+    except json.JSONDecodeError:
+        payload = None
+    if not isinstance(payload, dict):
+        return ""
+    status_code = int(payload.get("status_code") or 200)
+    if status_code < 400:
+        return ""
+    body = payload.get("body")
+    body_payload: Any = {}
+    if isinstance(body, str):
+        try:
+            body_payload = json.loads(body)
+        except json.JSONDecodeError:
+            body_payload = {}
+    message = ""
+    if isinstance(body_payload, dict):
+        error_info = body_payload.get("error_info")
+        if isinstance(error_info, dict):
+            message = str(error_info.get("message") or "")
+    trace = ""
+    headers = payload.get("headers")
+    if isinstance(headers, dict):
+        trace = str(headers.get("X-Tc-Trace") or headers.get("rpcUuid") or "")
+    return "；".join(part for part in [message or f"腾讯会议接口返回 {status_code}", f"trace={trace}" if trace else ""] if part)
+
+
+def extract_tencent_transcript_text(text: str) -> str:
+    payload = _load_tencent_json_payload(text)
+    body = payload.get("body") if isinstance(payload, dict) else None
+    if isinstance(body, str):
+        try:
+            body_payload = json.loads(body)
+        except json.JSONDecodeError:
+            return text
+    else:
+        body_payload = payload
+    if not isinstance(body_payload, dict):
+        return text
+    minutes = body_payload.get("minutes")
+    if not isinstance(minutes, dict):
+        return text
+    lines: list[str] = []
+    for paragraph in minutes.get("paragraphs", []) or []:
+        if not isinstance(paragraph, dict):
+            continue
+        speaker = paragraph.get("speaker")
+        speaker_name = ""
+        if isinstance(speaker, dict):
+            speaker_name = str(speaker.get("user_name") or "").strip()
+        words: list[str] = []
+        for sentence in paragraph.get("sentences", []) or []:
+            if not isinstance(sentence, dict):
+                continue
+            for word in sentence.get("words", []) or []:
+                if isinstance(word, dict):
+                    words.append(str(word.get("text") or ""))
+        content = "".join(words).strip()
+        if content:
+            lines.append(f"{speaker_name}：{content}" if speaker_name else content)
+    return "\n".join(lines)
+
+
+def extract_tencent_smart_minutes_text(text: str) -> str:
+    payload = _load_tencent_json_payload(text)
+    body = payload.get("body") if isinstance(payload, dict) else None
+    if isinstance(body, str):
+        try:
+            body_payload = json.loads(body)
+        except json.JSONDecodeError:
+            return text
+    else:
+        body_payload = payload
+    if not isinstance(body_payload, dict):
+        return text
+    meeting_minute = body_payload.get("meeting_minute")
+    if isinstance(meeting_minute, dict):
+        minute = str(meeting_minute.get("minute") or "").strip()
+        if minute:
+            return minute
+    return text
+
+
+def parse_tencent_record_result(text: str) -> dict[str, Any]:
     text = text.replace("\\n", "\n")
+    payload = _load_tencent_json_payload(text)
+    records: list[dict[str, str]] = []
+    if isinstance(payload, dict):
+        for meeting_record in payload.get("record_meetings", []) or []:
+            if not isinstance(meeting_record, dict):
+                continue
+            meeting_record_id = str(meeting_record.get("meeting_record_id") or "")
+            for record_file in meeting_record.get("record_files", []) or []:
+                if not isinstance(record_file, dict):
+                    continue
+                record_file_id = str(record_file.get("record_file_id") or "")
+                if record_file_id:
+                    records.append({"record_file_id": record_file_id, "meeting_record_id": meeting_record_id})
+
     record_file_match = re.search(r"(?:record_file_id|recordFileId|录制文件ID|录制文件id)\s*[：:]\s*([0-9]+)", text, re.I)
     meeting_record_match = re.search(r"(?:meeting_record_id|meetingRecordId|会议录制ID|会议录制id)\s*[：:]\s*([0-9]+)", text, re.I)
     download_match = re.search(r"https?://[^\\\s，。)）]+", text)
+    first_record = records[0] if records else {}
     return {
-        "record_file_id": record_file_match.group(1) if record_file_match else "",
-        "meeting_record_id": meeting_record_match.group(1) if meeting_record_match else "",
+        "record_file_id": first_record.get("record_file_id") or (record_file_match.group(1) if record_file_match else ""),
+        "meeting_record_id": first_record.get("meeting_record_id") or (meeting_record_match.group(1) if meeting_record_match else ""),
         "download_url": download_match.group(0) if download_match else "",
+        "records": records,
         "raw": text,
+    }
+
+
+def parse_tencent_record_address_result(text: str) -> dict[str, str]:
+    payload = _load_tencent_json_payload(text)
+    view_address = ""
+    if isinstance(payload, dict):
+        for record_file in payload.get("record_files", []) or []:
+            if isinstance(record_file, dict) and record_file.get("view_address"):
+                view_address = str(record_file["view_address"])
+                break
+    outer = json.loads(text) if text.strip().startswith("{") else {}
+    headers = outer.get("headers") if isinstance(outer, dict) else {}
+    return {
+        "view_address": view_address,
+        "trace": str(headers.get("X-Tc-Trace") or "") if isinstance(headers, dict) else "",
+        "rpc_uuid": str(headers.get("rpcUuid") or "") if isinstance(headers, dict) else "",
     }
 
 
@@ -115,6 +252,9 @@ def call_tencent_meeting_tool(name: str, arguments: dict[str, Any], timeout: int
         env={**os.environ, "TENCENT_MEETING_TOKEN": token},
     )
     output = (result.stdout or "") + ("\n" + result.stderr if result.stderr else "")
+    response_error = _tencent_response_error(output)
+    if response_error:
+        raise RuntimeError(response_error)
     if result.returncode != 0 or "[错误]" in output:
         raise RuntimeError(output.strip() or "腾讯会议创建失败")
     return output
@@ -154,34 +294,56 @@ def sync_tencent_meeting_minutes(db: Session, meeting: models.Meeting) -> models
     records_args = build_tencent_records_query(meeting)
     records_text = call_tencent_meeting_tool("get_records_list", records_args)
     record = parse_tencent_record_result(records_text)
-    record_file_id = record.get("record_file_id")
-    if not record_file_id:
-        raise RuntimeError("暂未查询到腾讯会议录制文件，请确认会议已结束并已开启云录制/转写")
+    records = record.get("records") or [record]
+    if not any(item.get("record_file_id") for item in records):
+        raise TencentMinutesUnavailableError("暂未查询到腾讯会议录制文件，请确认会议已结束并已开启云录制/转写")
 
-    smart_minutes = ""
     transcript = ""
-    try:
-        smart_minutes = call_tencent_meeting_tool("get_smart_minutes", {"record_file_id": record_file_id})
-    except Exception:
-        smart_minutes = ""
-    try:
-        transcript = call_tencent_meeting_tool("get_transcripts_details", {"record_file_id": record_file_id, "pid": "0", "limit": "50"})
-    except Exception:
-        transcript = ""
-    if not smart_minutes and not transcript:
-        raise RuntimeError("腾讯会议纪要或转写暂未生成，请稍后再同步")
+    selected_record = record
+    for candidate in records:
+        record_file_id = candidate.get("record_file_id")
+        if not record_file_id:
+            continue
+        try:
+            transcript = call_tencent_meeting_tool("get_transcripts_details", {"record_file_id": record_file_id, "pid": "0", "limit": "50"})
+            transcript = extract_tencent_transcript_text(transcript)
+        except Exception:
+            transcript = ""
+        if transcript:
+            selected_record = candidate
+            break
+    if not transcript:
+        raise TencentMinutesUnavailableError("腾讯会议转写暂未生成，请稍后再同步")
 
-    meeting.transcript = transcript or smart_minutes
-    meeting.summary = smart_minutes or transcript
-    link_parts = [meeting.recording_url or ""]
-    if record.get("meeting_record_id"):
-        link_parts.append(f"meeting_record_id：{record['meeting_record_id']}")
+    meeting.transcript = transcript
+    link_parts = [
+        part
+        for part in (meeting.recording_url or "").splitlines()
+        if part.strip()
+        and not part.strip().startswith("meeting_record_id")
+        and not part.strip().startswith("record_file_id")
+        and not part.strip().startswith("录制下载")
+    ]
+    if selected_record.get("meeting_record_id"):
+        link_parts.append(f"meeting_record_id：{selected_record['meeting_record_id']}")
+        address_text = call_tencent_meeting_tool(
+            "get_record_addresses",
+            {"meeting_record_id": selected_record["meeting_record_id"]},
+        )
+        address = parse_tencent_record_address_result(address_text)
+        if address["view_address"]:
+            link_parts.append(f"录屏查看：{address['view_address']}")
+        if address["trace"]:
+            link_parts.append(f"录屏 X-Tc-Trace：{address['trace']}")
+        if address["rpc_uuid"]:
+            link_parts.append(f"录屏 rpcUuid：{address['rpc_uuid']}")
+    record_file_id = selected_record.get("record_file_id", "")
     if record_file_id:
         link_parts.append(f"record_file_id：{record_file_id}")
     if record.get("download_url"):
         link_parts.append(f"录制下载：{record['download_url']}")
     meeting.recording_url = "\n".join(part for part in link_parts if part).strip()
-    meeting.status = "summarized"
+    meeting.status = "transcribed"
     db.commit()
     db.refresh(meeting)
     return meeting
@@ -922,6 +1084,10 @@ def _item_project_group_key(item: models.InboxItem) -> tuple[str, str, str]:
 def _project_signature(name: str) -> str:
     if "振三街" in name:
         return "振三街"
+    value = re.sub(r"(?:项目|地块|强排|方案|设计|总图|户型|规划条件|启动会|会议纪要)", "", name)
+    value = re.sub(r"(?:杭州|萧山|杭州市|萧山区|浙江|浙江省|市|区|县)", "", value)
+    if len(value) >= 2:
+        return value
     value = re.sub(r"(?:^.*市|^.*区|^.*县)", "", name)
     value = re.sub(r"(项目|地块)$", "", value)
     return value or name
@@ -2293,6 +2459,45 @@ def deposit_startup_analysis_to_knowledge(
     return record
 
 
+def meeting_summary_deposit_markdown(project: models.Project, meeting: models.Meeting) -> str:
+    lines = [
+        "---",
+        "type: meeting_summary",
+        f"project_id: {project.id}",
+        f"project: {project.name}",
+        f"meeting_id: {meeting.id}",
+        f"meeting_title: {meeting.title}",
+        f"status: {meeting.status}",
+        "---",
+        "",
+        f"# {project.name} - {meeting.title} AI会议纪要",
+        "",
+        "## AI纪要",
+        meeting.summary or "暂无AI纪要。",
+    ]
+    actions = meeting.next_actions_json or ""
+    if actions:
+        lines.extend(["", "## 待办", actions])
+    transcript = (meeting.transcript or "").strip()
+    if transcript:
+        lines.extend(["", "## 腾讯原始转写", transcript])
+    return "\n".join(lines).strip() + "\n"
+
+
+def deposit_meeting_summary_to_knowledge(
+    db: Session,
+    project: models.Project,
+    meeting: models.Meeting,
+) -> models.KnowledgeFile:
+    title = f"{project.name} {meeting.title} AI会议纪要"
+    indexed_path = f"project-deposits/{project.id}/meetings/{meeting.id}.md"
+    tags = ["项目沉淀", "会议纪要", "AI纪要", project.name, meeting.title, project.city, project.project_type, project.phase]
+    markdown = meeting_summary_deposit_markdown(project, meeting)
+    record = upsert_knowledge_markdown(db, indexed_path, title, markdown, [tag for tag in tags if tag])
+    db.flush()
+    return record
+
+
 def save_startup_analysis(
     db: Session,
     project: models.Project,
@@ -2454,6 +2659,53 @@ async def run_startup_analysis(db: Session, project: models.Project) -> dict[str
     return {"report": report, **payload}
 
 
+def classify_project_execution_instruction(project: models.Project, instruction: str) -> str:
+    text = instruction.strip().lower()
+    compact = re.sub(r"[\s，。！？!?,.、~～]+", "", text)
+    if compact in {"你好", "您好", "hello", "hi", "嗨", "哈喽", "在吗", "在不在"}:
+        return "greeting"
+
+    project_terms = {
+        project.name,
+        project.city,
+        project.project_type,
+        project.phase,
+        "项目",
+        "资料",
+        "任务",
+        "会议",
+        "纪要",
+        "执行",
+        "设计",
+        "方案",
+        "强排",
+        "总图",
+        "日照",
+        "退界",
+        "消防",
+        "面积",
+        "容积率",
+        "报批",
+        "规划",
+        "楼栋",
+        "户型",
+        "配套",
+        "风险",
+        "知识库",
+    }
+    if any(term and str(term).lower() in text for term in project_terms):
+        return "project"
+    return "unrelated"
+
+
+def build_project_execution_greeting(project: models.Project) -> str:
+    return f"你好，我在。你可以直接问我和“{project.name}”有关的问题，我会按当前项目资料、任务、会议纪要和知识库来回答。"
+
+
+def build_project_execution_refusal(project: models.Project) -> str:
+    return f"这个问题和当前项目“{project.name}”没有直接关系，我先不展开回答。请发和项目资料、任务、会议、设计风险或推进安排有关的问题。"
+
+
 def build_project_execution_prompt(project: models.Project, instruction: str, chunks: list[models.KnowledgeChunk]) -> str:
     latest_report = next((report for report in sorted(project.reports, key=lambda item: item.created_at, reverse=True)), None)
     context = {
@@ -2506,10 +2758,13 @@ def build_project_execution_prompt(project: models.Project, instruction: str, ch
     return (
         "你是建筑设计项目执行助手。请基于项目上下文、本地知识库检索结果和用户指令执行工作。\n"
         "要求：\n"
-        "1. 必须优先使用项目上下文和知识库内容，不要编造来源。\n"
-        "2. 输出要能直接服务项目推进，包含判断、拆解、风险和下一步建议。\n"
-        "3. 如果适合转成任务，请列出任务名、负责人角色、优先级和交付物。\n"
-        "4. 最后列出使用到的知识库来源路径。\n\n"
+        "1. 直接回应用户发来的具体问题，不要套固定项目模板，不要答非所问。\n"
+        "2. 必须优先使用项目上下文和知识库内容，不要编造来源。\n"
+        "3. 如果用户问题与当前项目无关，只能礼貌说明无法在项目执行台回答无关内容。\n"
+        "4. 普通打招呼可以自然回应，不要强行输出项目分析。\n"
+        "5. 输出要服务项目推进；只有在用户问题需要时，才包含判断、拆解、风险和下一步建议。\n"
+        "6. 如果适合转成任务，请列出任务名、负责人角色、优先级和交付物。\n"
+        "7. 如使用了知识库内容，可以在答案末尾简短列出来源路径；没有使用来源时不要写引用或来源说明。\n\n"
         f"用户指令：{instruction}\n\n"
         "项目执行上下文：\n"
         f"{json.dumps(context, ensure_ascii=False, indent=2)}"
@@ -2517,34 +2772,44 @@ def build_project_execution_prompt(project: models.Project, instruction: str, ch
 
 
 async def run_project_execution(db: Session, project: models.Project, instruction: str) -> models.AgentRun:
-    query = " ".join([project.name, project.city, project.project_type, project.phase, instruction])
-    chunks = search_knowledge(db, query, limit=8)
-    prompt = build_project_execution_prompt(project, instruction, chunks)
-    mode = "mock" if settings.mock_mode else "deepseek"
-    try:
-        if settings.mock_mode:
+    instruction_type = classify_project_execution_instruction(project, instruction)
+    chunks: list[models.KnowledgeChunk] = []
+    prompt = ""
+    if instruction_type == "greeting":
+        mode = "greeting"
+        answer = build_project_execution_greeting(project)
+    elif instruction_type == "unrelated":
+        mode = "refused"
+        answer = build_project_execution_refusal(project)
+    else:
+        query = " ".join([project.name, project.city, project.project_type, project.phase, instruction])
+        chunks = search_knowledge(db, query, limit=8)
+        prompt = build_project_execution_prompt(project, instruction, chunks)
+        mode = "mock" if settings.mock_mode else "deepseek"
+        try:
+            if settings.mock_mode:
+                answer = (
+                    f"【Mock模式】已读取 {project.name} 的项目上下文，并检索到 {len(chunks)} 条知识库片段。\n\n"
+                    f"针对“{instruction}”，建议先围绕资料缺口、技术风险、任务责任人和交付物四类事项拆解。\n\n"
+                    "## 下一步建议\n"
+                    "- 明确本轮要解决的关键技术问题。\n"
+                    "- 对照知识库历史项目经验形成复核清单。\n"
+                    "- 将结论转为任务或沉淀为项目知识。"
+                )
+            else:
+                answer = await call_deepseek_text(
+                    prompt=prompt,
+                    system_prompt="你是建筑设计项目执行助手。只基于用户当前问题、项目上下文和本地知识库回答；无关内容礼貌拒绝；普通问候自然回应；输出中文 Markdown。",
+                )
+        except Exception as exc:
+            mode = "deepseek_error"
             answer = (
-                f"【Mock模式】已读取 {project.name} 的项目上下文，并检索到 {len(chunks)} 条知识库片段。\n\n"
-                f"针对“{instruction}”，建议先围绕资料缺口、技术风险、任务责任人和交付物四类事项拆解。\n\n"
-                "## 下一步建议\n"
-                "- 明确本轮要解决的关键技术问题。\n"
-                "- 对照知识库历史项目经验形成复核清单。\n"
-                "- 将结论转为任务或沉淀为项目知识。"
+                "DeepSeek 调用失败，已回退为本地执行摘要。\n\n"
+                f"- 指令：{instruction}\n"
+                f"- 已检索知识片段：{len(chunks)} 条\n"
+                f"- 错误类型：{exc.__class__.__name__}\n\n"
+                "建议稍后重试，或先基于当前项目任务和会议纪要手动推进。"
             )
-        else:
-            answer = await call_deepseek_text(
-                prompt=prompt,
-                system_prompt="你是建筑设计项目执行助手。只基于项目上下文和本地知识库回答，输出中文 Markdown。",
-            )
-    except Exception as exc:
-        mode = "deepseek_error"
-        answer = (
-            "DeepSeek 调用失败，已回退为本地执行摘要。\n\n"
-            f"- 指令：{instruction}\n"
-            f"- 已检索知识片段：{len(chunks)} 条\n"
-            f"- 错误类型：{exc.__class__.__name__}\n\n"
-            "建议稍后重试，或先基于当前项目任务和会议纪要手动推进。"
-        )
     output = {
         "mode": mode,
         "answer": answer,
@@ -2561,7 +2826,7 @@ async def run_project_execution(db: Session, project: models.Project, instructio
     run = models.AgentRun(
         project_id=project.id,
         agent_id="project-execution",
-        input_context=json.dumps({"instruction": instruction, "prompt": prompt}, ensure_ascii=False),
+        input_context=json.dumps({"instruction": instruction, "instruction_type": instruction_type, "prompt": prompt}, ensure_ascii=False),
         output_json=json.dumps(output, ensure_ascii=False),
         status="succeeded" if mode != "deepseek_error" else "failed",
     )
@@ -2628,42 +2893,75 @@ def default_meeting_agenda(project: models.Project) -> str:
     )
 
 
-def summarize_meeting(db: Session, meeting: models.Meeting) -> models.Meeting:
+def _format_meeting_summary_markdown(project_name: str, payload: dict[str, Any]) -> str:
+    summary = str(payload.get("summary") or "").strip()
+    decisions = [str(item).strip() for item in payload.get("decisions", []) if str(item).strip()]
+    risks = [str(item).strip() for item in payload.get("risks", []) if str(item).strip()]
+    next_steps = [str(item).strip() for item in payload.get("next_steps", []) if str(item).strip()]
+    lines = [f"# {project_name} 会议纪要", "", "## 摘要", summary or "未能从真实转写中提取明确摘要。"]
+    if decisions:
+        lines.extend(["", "## 决策事项", *[f"- {item}" for item in decisions]])
+    if risks:
+        lines.extend(["", "## 风险与问题", *[f"- {item}" for item in risks]])
+    if next_steps:
+        lines.extend(["", "## 下一步", *[f"- {item}" for item in next_steps]])
+    return "\n".join(lines).strip()
+
+
+def _fallback_real_transcript_summary(project_name: str, transcript: str) -> tuple[str, list[dict[str, str]]]:
+    excerpt = transcript.strip()[:1800]
+    summary = (
+        f"# {project_name} 会议纪要\n\n"
+        "## 摘要\n"
+        "以下内容基于腾讯会议真实转写生成。当前模型未返回结构化纪要，先保留原始转写摘要供复核。\n\n"
+        "## 原始转写摘录\n"
+        f"{excerpt}"
+    )
+    return summary, []
+
+
+async def summarize_meeting(db: Session, meeting: models.Meeting) -> models.Meeting:
     project = db.get(models.Project, meeting.project_id)
     project_name = project.name if project else "当前项目"
-    transcript = meeting.transcript.strip()
-    basis = transcript or meeting.agenda
-    if not basis and project:
-        basis = default_meeting_agenda(project)
-    actions = [
-        {"title": "补齐规划条件、红线、日照和退界资料", "owner": "项目经理", "status": "todo"},
-        {"title": "整理历史相似项目技术复用卡", "owner": "AI资料管理员", "status": "todo"},
-        {"title": "输出本轮任务拆解和PPT结构", "owner": "AI汇报助理", "status": "todo"},
-    ]
-    meeting.summary = (
-        f"# {project_name} 会议纪要\n\n"
-        "## 核心结论\n"
-        "- 本轮会议重点围绕项目启动、资料缺口、技术边界和下一步分工展开。\n"
-        "- 需要优先确认日照、退界、面积计算、消防/报批等基础约束。\n"
-        "- AI 将把会议结论转化为任务看板和后续汇报结构。\n\n"
-        "## 原始记录摘要\n"
-        f"{basis[:1600] or '暂无会议记录，已按启动会议程生成纪要。'}\n\n"
-        "## 下一步\n"
-        + "\n".join(f"- {item['title']}（{item['owner']}）" for item in actions)
+    transcript = (meeting.transcript or "").strip()
+    if not transcript:
+        raise ValueError("请先同步腾讯会议真实转写，再生成AI纪要")
+
+    prompt = (
+        "请只基于以下腾讯会议真实转写生成会议纪要，不要补充转写中没有的信息。\n"
+        "输出 JSON，字段：summary 字符串；decisions 字符串数组；risks 字符串数组；"
+        "next_steps 字符串数组；todos 数组，每项包含 title、owner、status。"
+        "如果无法判断负责人，owner 写“待确认”；status 默认 todo。\n\n"
+        f"项目：{project_name}\n"
+        f"会议标题：{meeting.title}\n"
+        f"真实转写：\n{transcript[:12000]}"
     )
-    meeting.mindmap_json = json.dumps(
-        {
-            "name": project_name,
-            "children": [
-                {"name": "资料缺口", "children": [{"name": "规划条件"}, {"name": "日照退界"}, {"name": "面积计算"}]},
-                {"name": "任务推进", "children": [{"name": "任务拆解"}, {"name": "责任人"}, {"name": "节点计划"}]},
-                {"name": "汇报准备", "children": [{"name": "PPT结构"}, {"name": "风险问题"}, {"name": "业主决策"}]},
-            ],
-        },
-        ensure_ascii=False,
-    )
+    actions: list[dict[str, str]] = []
+    try:
+        payload = await call_deepseek_json(prompt)
+    except Exception:
+        payload = {}
+    if payload:
+        meeting.summary = _format_meeting_summary_markdown(project_name, payload)
+        for item in payload.get("todos", []):
+            if isinstance(item, dict):
+                title = str(item.get("title") or "").strip()
+                if title:
+                    actions.append(
+                        {
+                            "title": title,
+                            "owner": str(item.get("owner") or "待确认").strip() or "待确认",
+                            "status": str(item.get("status") or "todo").strip() or "todo",
+                        }
+                    )
+    else:
+        meeting.summary, actions = _fallback_real_transcript_summary(project_name, transcript)
+
+    meeting.mindmap_json = "{}"
     meeting.next_actions_json = json.dumps(actions, ensure_ascii=False)
     meeting.status = "summarized"
+    if project:
+        deposit_meeting_summary_to_knowledge(db, project, meeting)
     db.commit()
 
     existing_names = {task.task_name for task in project.tasks} if project else set()

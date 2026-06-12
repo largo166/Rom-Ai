@@ -720,6 +720,12 @@ export function createProjectMeeting(projectId: string, payload: Partial<Project
   });
 }
 
+export function deleteProjectMeeting(projectId: string, meetingId: string) {
+  return request<{ deleted: boolean; deleted_meeting_id: string }>(`/api/projects/${projectId}/meetings/${meetingId}`, {
+    method: 'DELETE',
+  });
+}
+
 export function createTencentProjectMeeting(projectId: string, payload: { title: string; start_time: string; end_time: string; agenda?: string }) {
   return request<ProjectMeeting>(`/api/projects/${projectId}/meetings/tencent`, {
     method: 'POST',

@@ -350,6 +350,33 @@ class InboxWorkflowTest(unittest.TestCase):
             finally:
                 db.close()
 
+    def test_batch_advice_merges_xiangbei_aliases_into_one_project(self):
+        with TemporaryDirectory() as tmp:
+            db = self.open_temp_db()
+            try:
+                samples = [
+                    ("杭州湘北地块项目_规划条件_20260610.md", "杭州湘北地块项目 规划条件，容积率、退界和消防要求。"),
+                    ("湘北地块强排方案.pdf", "湘北地块 强排方案，总图排布和日照复核。"),
+                    ("杭州萧山湘北项目总图及户型.pptx", "杭州萧山湘北项目 总图及户型资料。"),
+                    ("湘北地块启动会纪要.md", "湘北地块启动会纪要，讨论报规节点和设计任务。"),
+                ]
+                item_ids = []
+                for filename, content in samples:
+                    source = Path(tmp) / filename
+                    source.write_text(content, encoding="utf-8")
+                    item = create_inbox_item_from_path(db, source, Path(tmp) / "inbox")
+                    classify_inbox_item(db, item)
+                    item_ids.append(item.id)
+
+                advice = build_inbox_batch_advice(db, item_ids)
+
+                self.assertEqual(advice["action_counts"]["创建项目"], 1)
+                self.assertEqual(len(advice["project_groups"]), 1)
+                self.assertEqual(advice["project_groups"][0]["project_name"], "杭州湘北地块项目")
+                self.assertEqual(advice["project_groups"][0]["file_count"], 4)
+            finally:
+                db.close()
+
     def test_apply_recommendations_creates_one_project_for_merged_batch(self):
         with TemporaryDirectory() as tmp:
             db = self.open_temp_db()

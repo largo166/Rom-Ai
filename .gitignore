@@ -3,6 +3,7 @@
 backend/.env
 backend/data/
 backend/uploads/
+backend/C:*uploads/
 backend/cloud/
 
 # Dependencies and virtual environments

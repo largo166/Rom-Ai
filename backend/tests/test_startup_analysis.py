@@ -7,14 +7,19 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
 from app import models
+import app.services as services
 from app.services import (
     build_startup_analysis_prompt,
     build_project_execution_prompt,
+    classify_project_execution_instruction,
     build_tencent_records_query,
     deposit_startup_analysis_to_knowledge,
     extract_tencent_meeting_metadata,
     parse_tencent_meeting_result,
+    parse_tencent_record_address_result,
     parse_tencent_record_result,
+    extract_tencent_smart_minutes_text,
+    sync_tencent_meeting_minutes,
     pending_analysis_files,
     parse_deepseek_models,
     scan_vault_directory,
@@ -74,6 +79,20 @@ class StartupAnalysisPromptTest(unittest.TestCase):
 
 
 class ProjectExecutionPromptTest(unittest.TestCase):
+    def test_execution_instruction_classifier_allows_greetings(self):
+        project = models.Project(name="湘北强排", city="杭州", project_type="住宅")
+
+        result = classify_project_execution_instruction(project, "你好")
+
+        self.assertEqual(result, "greeting")
+
+    def test_execution_instruction_classifier_rejects_unrelated_requests(self):
+        project = models.Project(name="湘北强排", city="杭州", project_type="住宅")
+
+        result = classify_project_execution_instruction(project, "帮我写一首关于咖啡的诗")
+
+        self.assertEqual(result, "unrelated")
+
     def test_execution_prompt_includes_project_context_and_knowledge(self):
         project = models.Project(
             name="湘北强排",
@@ -102,6 +121,8 @@ class ProjectExecutionPromptTest(unittest.TestCase):
         self.assertIn("帮我拆总图任务", prompt)
         self.assertIn("日照复核", prompt)
         self.assertIn("历史强排经验", prompt)
+        self.assertIn("直接回应用户发来的具体问题", prompt)
+        self.assertIn("与当前项目无关", prompt)
 
 
 class DeepSeekModelsTest(unittest.TestCase):
@@ -253,6 +274,56 @@ class TencentMeetingResultTest(unittest.TestCase):
         self.assertEqual(parsed["meeting_record_id"], "987654")
         self.assertIn("总图退界复核", parsed["raw"])
 
+    def test_parse_record_file_ids_from_tencent_json_list(self):
+        text = (
+            '{"status_code":200,"body":"{'
+            '\\"record_meetings\\":[{'
+            '\\"media_start_time\\":\\"2026-06-11T13:52:03+08:00\\",'
+            '\\"meeting_record_id\\":\\"2064948756988846080\\",'
+            '\\"record_files\\":[{\\"record_file_id\\":\\"2064948756988846081\\"}]'
+            '},{'
+            '\\"media_start_time\\":\\"2026-06-11T13:47:23+08:00\\",'
+            '\\"meeting_record_id\\":\\"2064947583555862528\\",'
+            '\\"record_files\\":[{\\"record_file_id\\":\\"2064947583555862529\\"}]'
+            '}]}"}'
+        )
+
+        parsed = parse_tencent_record_result(text)
+
+        self.assertEqual(parsed["record_file_id"], "2064948756988846081")
+        self.assertEqual(parsed["meeting_record_id"], "2064948756988846080")
+        self.assertEqual(
+            parsed["records"],
+            [
+                {"record_file_id": "2064948756988846081", "meeting_record_id": "2064948756988846080"},
+                {"record_file_id": "2064947583555862529", "meeting_record_id": "2064947583555862528"},
+            ],
+        )
+
+    def test_parse_record_view_address_and_trace(self):
+        text = (
+            '{"status_code":200,"headers":{"X-Tc-Trace":"trace-001","rpcUuid":"rpc-001"},'
+            '"body":"{\\"record_files\\":[{\\"view_address\\":\\"https://meeting.tencent.com/crw/example\\"}]}"}'
+        )
+
+        parsed = parse_tencent_record_address_result(text)
+
+        self.assertEqual(parsed["view_address"], "https://meeting.tencent.com/crw/example")
+        self.assertEqual(parsed["trace"], "trace-001")
+        self.assertEqual(parsed["rpc_uuid"], "rpc-001")
+
+    def test_extract_smart_minutes_text_from_tencent_json(self):
+        text = (
+            '{"status_code":200,"body":"{'
+            '\\"meeting_minute\\":{\\"minute\\":\\"会议主题：本地AI设计工作台产品演示\\\\n会议摘要：已生成。\\"}'
+            '}"}'
+        )
+
+        minutes = extract_tencent_smart_minutes_text(text)
+
+        self.assertIn("会议主题：本地AI设计工作台产品演示", minutes)
+        self.assertNotIn("status_code", minutes)
+
     def test_build_records_query_falls_back_to_meeting_time(self):
         meeting = models.Meeting(
             recording_url="https://meeting.tencent.com/dm/abc123",
@@ -264,6 +335,54 @@ class TencentMeetingResultTest(unittest.TestCase):
         self.assertEqual(query["page_size"], 10)
         self.assertIn("start_time", query)
         self.assertIn("end_time", query)
+
+    def test_sync_tencent_minutes_stores_only_real_transcript(self):
+        engine = create_engine("sqlite:///:memory:", connect_args={"check_same_thread": False})
+        Base.metadata.create_all(bind=engine)
+        db = sessionmaker(autocommit=False, autoflush=False, bind=engine)()
+        original_call = services.call_tencent_meeting_tool
+        try:
+            project = models.Project(name="会议项目")
+            meeting = models.Meeting(title="真实会议", date=datetime(2026, 6, 11, 13, 46), summary="旧纪要")
+            project.meetings = [meeting]
+            db.add(project)
+            db.commit()
+            db.refresh(meeting)
+
+            def fake_call(name, arguments, timeout=60):
+                if name == "get_records_list":
+                    return (
+                        '{"status_code":200,"body":"{'
+                        '\\"record_meetings\\":[{\\"meeting_record_id\\":\\"mr1\\",'
+                        '\\"record_files\\":[{\\"record_file_id\\":\\"rf1\\"}]}]'
+                        '}"}'
+                    )
+                if name == "get_transcripts_details":
+                    return (
+                        '{"status_code":200,"body":"{'
+                        '\\"minutes\\":{\\"paragraphs\\":[{\\"speaker\\":{\\"user_name\\":\\"韩暄\\"},'
+                        '\\"sentences\\":[{\\"words\\":[{\\"text\\":\\"真实转写内容\\"}]}]}]}}'
+                        '"}'
+                    )
+                if name == "get_record_addresses":
+                    return (
+                        '{"status_code":200,"headers":{"X-Tc-Trace":"trace-001","rpcUuid":"rpc-001"},'
+                        '"body":"{\\"record_files\\":[{\\"view_address\\":\\"https://meeting.tencent.com/crw/example\\"}]}"}'
+                    )
+                raise AssertionError(f"unexpected tool call: {name}")
+
+            services.call_tencent_meeting_tool = fake_call
+
+            synced = sync_tencent_meeting_minutes(db, meeting)
+
+            self.assertIn("韩暄：真实转写内容", synced.transcript)
+            self.assertEqual(synced.summary, "旧纪要")
+            self.assertEqual(synced.status, "transcribed")
+            self.assertIn("录屏查看：https://meeting.tencent.com/crw/example", synced.recording_url)
+            self.assertIn("录屏 X-Tc-Trace：trace-001", synced.recording_url)
+        finally:
+            services.call_tencent_meeting_tool = original_call
+            db.close()
 
 
 if __name__ == "__main__":

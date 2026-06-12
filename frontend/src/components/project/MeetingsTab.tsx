@@ -4,24 +4,30 @@ import {
   ChevronDown,
   ChevronUp,
   Loader2,
+  Play,
   Sparkles,
   Square,
   CalendarDays,
+  Trash2,
   X,
 } from 'lucide-react';
 import {
   type ProjectMeeting,
   createProjectMeeting,
   createTencentProjectMeeting,
+  deleteProjectMeeting,
   syncTencentMeetingMinutes,
   summarizeProjectMeeting,
 } from '../../lib/projectsApi';
+import { parseMeetingActionItems } from './meetingActions';
 
 type Props = {
   projectId: string;
   meetings: ProjectMeeting[];
   onRefresh: () => void;
 };
+
+const TRANSCRIPT_PREVIEW_LINES = 5;
 
 function formatDate(value: string) {
   if (!value) return '';
@@ -46,12 +52,17 @@ function getStatusBadge(status: string) {
 }
 
 function extractTencentJoinUrl(meetingLink: string) {
-  return meetingLink.match(/https:\/\/meeting\.tencent\.com\/[^\s，。)）]+/)?.[0] ?? '';
+  return meetingLink.match(/https:\/\/meeting\.tencent\.com\/dm\/[^\s，。)）]+/)?.[0] ?? '';
+}
+
+function extractTencentRecordingUrl(meetingLink: string) {
+  return meetingLink.match(/https:\/\/meeting\.tencent\.com\/crw\/[^\s，。)）]+/)?.[0] ?? '';
 }
 
 export function MeetingsTab({ projectId, meetings, onRefresh }: Props) {
   const [showCreateModal, setShowCreateModal] = useState(false);
   const [expandedId, setExpandedId] = useState<string | null>(null);
+  const [deleteTarget, setDeleteTarget] = useState<ProjectMeeting | null>(null);
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState('');
 
@@ -64,6 +75,7 @@ export function MeetingsTab({ projectId, meetings, onRefresh }: Props) {
 
   // 纪要生成
   const [transcriptMap, setTranscriptMap] = useState<Record<string, string>>({});
+  const [expandedTranscriptMap, setExpandedTranscriptMap] = useState<Record<string, boolean>>({});
 
   useEffect(() => {
     setMessage('');
@@ -129,7 +141,7 @@ export function MeetingsTab({ projectId, meetings, onRefresh }: Props) {
         return next;
       });
       await onRefresh();
-      setMessage('纪要和待办已生成。');
+      setMessage('已基于真实会议转写生成AI纪要和待办。');
     } catch (error) {
       setMessage(`生成纪要失败：${String(error)}`);
     } finally {
@@ -143,9 +155,38 @@ export function MeetingsTab({ projectId, meetings, onRefresh }: Props) {
     try {
       await syncTencentMeetingMinutes(projectId, meeting.id);
       await onRefresh();
-      setMessage('已同步腾讯会议转写/智能纪要。');
+      setMessage('已同步腾讯会议真实原始转写和录屏入口。');
     } catch (error) {
-      setMessage(`同步腾讯纪要失败：${String(error)}`);
+      const detail = error instanceof Error ? error.message : String(error);
+      setMessage(`暂时无法同步腾讯原始转写：${detail}。请确认这场会议已开启云录制和转写。`);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function handleDeleteMeeting() {
+    if (!deleteTarget) return;
+    const deletedMeeting = deleteTarget;
+    setBusy(true);
+    setMessage('');
+    try {
+      await deleteProjectMeeting(projectId, deletedMeeting.id);
+      setDeleteTarget(null);
+      setExpandedId((current) => current === deletedMeeting.id ? null : current);
+      setTranscriptMap((prev) => {
+        const next = { ...prev };
+        delete next[deletedMeeting.id];
+        return next;
+      });
+      setExpandedTranscriptMap((prev) => {
+        const next = { ...prev };
+        delete next[deletedMeeting.id];
+        return next;
+      });
+      await onRefresh();
+      setMessage(`已删除会议记录“${deletedMeeting.title}”。`);
+    } catch (error) {
+      setMessage(`删除失败：${String(error)}`);
     } finally {
       setBusy(false);
     }
@@ -153,30 +194,7 @@ export function MeetingsTab({ projectId, meetings, onRefresh }: Props) {
 
   // 解析待办事项
   function getActionItems(meeting: ProjectMeeting): string[] {
-    if (!meeting.next_actions_json) return [];
-    try {
-      const parsed = JSON.parse(meeting.next_actions_json);
-      if (Array.isArray(parsed)) return parsed.map(String);
-      if (typeof parsed === 'object' && parsed !== null) {
-        const items = Object.values(parsed as Record<string, unknown>).flatMap((v) => {
-          if (typeof v === 'string') return [v];
-          if (Array.isArray(v)) {
-            return v.map((item) => {
-              if (typeof item === 'string') return item;
-              if (typeof item === 'object' && item !== null && 'title' in item) {
-                return String((item as { title: unknown }).title);
-              }
-              return String(item);
-            });
-          }
-          return [];
-        });
-        return items;
-      }
-      return [];
-    } catch {
-      return [];
-    }
+    return parseMeetingActionItems(meeting.next_actions_json);
   }
 
   return (
@@ -242,12 +260,12 @@ export function MeetingsTab({ projectId, meetings, onRefresh }: Props) {
                 </label>
               )}
               <label className="block text-xs text-zinc-500">
-                {createTencent ? '议程 / 备注' : '备注 / 会议链接'}
+                {createTencent ? '会前议程 / 备注' : '备注 / 会议链接'}
                 <textarea
                   value={newNotes}
                   onChange={(e) => setNewNotes(e.target.value)}
                   className="mt-1 min-h-[72px] w-full resize-none rounded-lg border border-white/10 bg-white/5 px-3 py-2.5 text-sm text-zinc-200 outline-none focus:border-amber-400/60"
-                  placeholder={createTencent ? '可填写会议议程，留空则自动生成默认议程' : '腾讯会议链接或其他备注'}
+                  placeholder={createTencent ? '可选：填写真实会前议程或备注；留空则不生成内容' : '腾讯会议链接或其他备注'}
                 />
               </label>
               <label className="flex items-center gap-2 rounded-lg border border-white/10 bg-white/5 p-3 text-xs text-zinc-300">
@@ -271,6 +289,34 @@ export function MeetingsTab({ projectId, meetings, onRefresh }: Props) {
         </div>
       )}
 
+      {deleteTarget && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm">
+          <div className="w-full max-w-md rounded-xl border border-red-400/20 bg-[#171717] p-6">
+            <h3 className="text-lg font-semibold text-white">删除会议记录</h3>
+            <p className="mt-3 text-sm leading-6 text-zinc-400">
+              确认删除“{deleteTarget.title}”？会议记录及其生成的知识库纪要将被删除，此操作无法撤销。
+            </p>
+            <div className="mt-6 flex justify-end gap-3">
+              <button
+                disabled={busy}
+                onClick={() => setDeleteTarget(null)}
+                className="rounded-lg border border-white/10 px-4 py-2 text-sm text-zinc-300 hover:bg-white/5 disabled:opacity-50"
+              >
+                取消
+              </button>
+              <button
+                disabled={busy}
+                onClick={handleDeleteMeeting}
+                className="inline-flex items-center gap-2 rounded-lg bg-red-500 px-4 py-2 text-sm font-semibold text-white hover:bg-red-400 disabled:opacity-50"
+              >
+                {busy ? <Loader2 size={14} className="animate-spin" /> : <Trash2 size={14} />}
+                确认删除
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* 会议列表 */}
       {sortedMeetings.length === 0 ? (
         <div className="rounded-xl border border-white/10 bg-white/5 p-8 text-center">
@@ -285,6 +331,13 @@ export function MeetingsTab({ projectId, meetings, onRefresh }: Props) {
           {sortedMeetings.map((meeting) => {
             const isExpanded = expandedId === meeting.id;
             const actionItems = getActionItems(meeting);
+            const transcriptLines = meeting.transcript.trimEnd().split(/\r?\n/);
+            const isLongTranscript = transcriptLines.length > TRANSCRIPT_PREVIEW_LINES;
+            const isTranscriptExpanded = expandedTranscriptMap[meeting.id] ?? false;
+            const visibleTranscript =
+              isLongTranscript && !isTranscriptExpanded
+                ? `${transcriptLines.slice(0, TRANSCRIPT_PREVIEW_LINES).join('\n').trimEnd()}\n…`
+                : meeting.transcript;
             return (
               <div
                 key={meeting.id}
@@ -316,10 +369,10 @@ export function MeetingsTab({ projectId, meetings, onRefresh }: Props) {
                 {/* 展开详情 */}
                 {isExpanded && (
                   <div className="border-t border-white/10 p-4">
-                    {/* 议程 */}
+                    {/* 会前议程 */}
                     {meeting.agenda && (
                       <div className="mb-4">
-                        <div className="mb-2 text-xs font-medium text-amber-300">议程</div>
+                        <div className="mb-2 text-xs font-medium text-amber-300">会前议程</div>
                         <pre className="whitespace-pre-wrap text-sm leading-6 text-zinc-400">
                           {meeting.agenda}
                         </pre>
@@ -331,6 +384,15 @@ export function MeetingsTab({ projectId, meetings, onRefresh }: Props) {
                         <div className="mb-2 flex items-center justify-between gap-3">
                           <div className="text-xs font-medium text-blue-300">腾讯会议</div>
                           <div className="flex items-center gap-2">
+                            {extractTencentRecordingUrl(meeting.meeting_link) && (
+                              <button
+                                onClick={() => window.open(extractTencentRecordingUrl(meeting.meeting_link), '_blank', 'noopener,noreferrer')}
+                                className="inline-flex items-center gap-1.5 rounded-lg border border-purple-400/30 bg-purple-400/10 px-2.5 py-1.5 text-xs text-purple-200 hover:bg-purple-400/20"
+                              >
+                                <Play size={12} />
+                                查看录屏
+                              </button>
+                            )}
                             {extractTencentJoinUrl(meeting.meeting_link) && (
                               <button
                                 onClick={() => window.open(extractTencentJoinUrl(meeting.meeting_link), '_blank', 'noopener,noreferrer')}
@@ -345,22 +407,53 @@ export function MeetingsTab({ projectId, meetings, onRefresh }: Props) {
                               className="inline-flex items-center gap-1.5 rounded-lg border border-emerald-400/30 bg-emerald-400/10 px-2.5 py-1.5 text-xs text-emerald-200 hover:bg-emerald-400/20 disabled:opacity-50"
                             >
                               {busy ? <Loader2 size={12} className="animate-spin" /> : <Sparkles size={12} />}
-                              同步腾讯纪要
+                              同步腾讯原始记录
                             </button>
                           </div>
                         </div>
-                        <pre className="whitespace-pre-wrap rounded-lg border border-white/10 bg-[#0E0E0E] p-3 text-sm leading-6 text-zinc-300">
-                          {meeting.meeting_link}
-                        </pre>
+                        <div className="rounded-lg border border-white/10 bg-[#0E0E0E] px-3 py-2.5 text-xs text-zinc-500">
+                          已关联腾讯会议
+                          {extractTencentRecordingUrl(meeting.meeting_link) && ' · 已获取会议录屏'}
+                        </div>
                       </div>
                     )}
 
                     {/* 纪要 */}
                     {meeting.summary && (
                       <div className="mb-4">
-                        <div className="mb-2 text-xs font-medium text-emerald-300">纪要</div>
+                        <div className="mb-2 text-xs font-medium text-emerald-300">AI纪要（基于真实转写）</div>
                         <pre className="whitespace-pre-wrap text-sm leading-6 text-zinc-400">
                           {meeting.summary}
+                        </pre>
+                      </div>
+                    )}
+
+                    {meeting.transcript && (
+                      <div className="mb-4">
+                        <div className="mb-2 flex items-center justify-between gap-3">
+                          <div className="text-xs font-medium text-purple-300">
+                            腾讯原始转写
+                            <span className="ml-2 font-normal text-zinc-500">
+                              {meeting.transcript.length.toLocaleString('zh-CN')} 字
+                            </span>
+                          </div>
+                          {isLongTranscript && (
+                            <button
+                              onClick={() =>
+                                setExpandedTranscriptMap((prev) => ({
+                                  ...prev,
+                                  [meeting.id]: !isTranscriptExpanded,
+                                }))
+                              }
+                              className="inline-flex shrink-0 items-center gap-1 text-xs text-purple-300 hover:text-purple-200"
+                            >
+                              {isTranscriptExpanded ? <ChevronUp size={13} /> : <ChevronDown size={13} />}
+                              {isTranscriptExpanded ? '收起全文' : '展开全文'}
+                            </button>
+                          )}
+                        </div>
+                        <pre className={`${isTranscriptExpanded ? 'max-h-[60vh]' : 'max-h-80'} overflow-auto whitespace-pre-wrap rounded-lg border border-white/10 bg-[#0E0E0E] p-3 text-sm leading-6 text-zinc-300`}>
+                          {visibleTranscript}
                         </pre>
                       </div>
                     )}
@@ -380,14 +473,14 @@ export function MeetingsTab({ projectId, meetings, onRefresh }: Props) {
                       </div>
                     )}
 
-                    {/* 会议记录输入 + AI生成纪要 */}
+                    {/* 真实会议记录输入 + AI生成纪要 */}
                     <div className="mt-3 space-y-3">
                       <textarea
                         value={transcriptMap[meeting.id] ?? ''}
                         onChange={(e) =>
                           setTranscriptMap((prev) => ({ ...prev, [meeting.id]: e.target.value }))
                         }
-                        placeholder="粘贴会议记录文本，用于生成纪要和待办"
+                        placeholder="没有腾讯转写时，可粘贴真实会议记录文本，用于生成AI纪要和待办"
                         className="w-full rounded-lg border border-white/10 bg-white/5 px-3 py-2 text-sm text-zinc-200 outline-none focus:border-amber-400/60 min-h-[80px] resize-none"
                       />
                       <button
@@ -396,7 +489,17 @@ export function MeetingsTab({ projectId, meetings, onRefresh }: Props) {
                         className="inline-flex items-center gap-2 rounded-lg border border-amber-400/40 bg-amber-400/10 px-3 py-2 text-sm text-amber-200 hover:bg-amber-400/20 disabled:opacity-50"
                       >
                         {busy ? <Loader2 size={14} className="animate-spin" /> : <Sparkles size={14} />}
-                        AI生成纪要
+                        基于真实转写生成AI纪要
+                      </button>
+                    </div>
+                    <div className="mt-4 border-t border-white/10 pt-4">
+                      <button
+                        disabled={busy}
+                        onClick={() => setDeleteTarget(meeting)}
+                        className="inline-flex items-center gap-2 rounded-lg border border-red-400/30 bg-red-400/10 px-3 py-2 text-sm text-red-200 hover:bg-red-400/20 disabled:opacity-50"
+                      >
+                        <Trash2 size={14} />
+                        删除会议记录
                       </button>
                     </div>
                   </div>

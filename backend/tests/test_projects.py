@@ -1,4 +1,5 @@
 import unittest
+import asyncio
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
@@ -7,14 +8,15 @@ from sqlalchemy.orm import sessionmaker
 
 from app import models, schemas
 from app.database import Base
-from app.services import delete_project_library
-from app.routes.projects import assign_project_task, create_project_task, update_project_task
+from app.services import delete_project_library, search_knowledge, summarize_meeting
+from app.routes.projects import assign_project_task, create_project_meeting, create_project_task, delete_project_meeting, sync_tencent_project_meeting_minutes, update_project_task
 from app.routes.team import (
     add_team_member,
     get_all_members,
     get_network_member_workload,
     update_global_team_member,
 )
+import app.routes.projects as project_routes
 
 
 class ProjectDeleteTest(unittest.TestCase):
@@ -81,6 +83,128 @@ class ProjectTeamWorkflowTest(unittest.TestCase):
             self.assertEqual(updated.name, "张三")
             self.assertTrue(any(item["id"] == member.id and item["type"] == "human" and item["name"] == "张三" for item in members["members"]))
             self.assertTrue(any(item["id"] == ai.id and item["type"] == "digital_employee" for item in members["members"]))
+        finally:
+            db.close()
+
+    def test_tencent_minutes_unavailable_returns_business_status(self):
+        db = self.open_temp_db()
+        original_sync = project_routes.sync_tencent_meeting_minutes
+        try:
+            project = models.Project(name="会议项目", city="杭州")
+            meeting = models.Meeting(title="启动会", recording_url="https://meeting.tencent.com/dm/example")
+            project.meetings = [meeting]
+            db.add(project)
+            db.commit()
+            db.refresh(project)
+            db.refresh(meeting)
+
+            def unavailable(_db, _meeting):
+                raise project_routes.TencentMinutesUnavailableError("暂未查询到腾讯会议录制文件")
+
+            project_routes.sync_tencent_meeting_minutes = unavailable
+
+            with self.assertRaises(Exception) as context:
+                sync_tencent_project_meeting_minutes(project.id, meeting.id, db)
+
+            self.assertEqual(context.exception.status_code, 409)
+            self.assertEqual(context.exception.detail, "暂未查询到腾讯会议录制文件")
+        finally:
+            project_routes.sync_tencent_meeting_minutes = original_sync
+            db.close()
+
+    def test_meeting_summary_requires_real_transcript(self):
+        db = self.open_temp_db()
+        try:
+            project = models.Project(name="会议项目", city="杭州")
+            meeting = models.Meeting(title="启动会", agenda="模板议程", transcript="")
+            project.meetings = [meeting]
+            db.add(project)
+            db.commit()
+            db.refresh(meeting)
+
+            with self.assertRaises(ValueError) as context:
+                asyncio.run(summarize_meeting(db, meeting))
+
+            self.assertEqual(str(context.exception), "请先同步腾讯会议真实转写，再生成AI纪要")
+        finally:
+            db.close()
+
+    def test_meeting_summary_is_saved_as_project_knowledge(self):
+        db = self.open_temp_db()
+        try:
+            project = models.Project(name="会议项目", city="杭州")
+            meeting = models.Meeting(
+                title="启动会",
+                transcript="韩暄：真实会议确认先复核消防登高面和日照退界。",
+            )
+            project.meetings = [meeting]
+            db.add(project)
+            db.commit()
+            db.refresh(meeting)
+
+            asyncio.run(summarize_meeting(db, meeting))
+            chunks = search_knowledge(db, "真实会议 消防登高面 日照退界", limit=5)
+
+            self.assertTrue(chunks)
+            self.assertTrue(any("消防登高面" in chunk.content for chunk in chunks))
+            self.assertTrue(any(f"project-deposits/{project.id}/meetings/{meeting.id}.md" in chunk.path for chunk in chunks))
+        finally:
+            db.close()
+
+    def test_create_project_meeting_does_not_invent_agenda(self):
+        db = self.open_temp_db()
+        try:
+            project = models.Project(name="会议项目", city="杭州")
+            db.add(project)
+            db.commit()
+            db.refresh(project)
+
+            meeting = create_project_meeting(project.id, schemas.ProjectMeetingCreate(title="启动会"), db)
+
+            self.assertEqual(meeting.agenda, "")
+        finally:
+            db.close()
+
+    def test_delete_project_meeting_removes_its_knowledge_deposit(self):
+        db = self.open_temp_db()
+        try:
+            project = models.Project(name="会议项目", city="杭州")
+            meeting = models.Meeting(title="启动会", transcript="确认消防复核。")
+            project.meetings = [meeting]
+            db.add(project)
+            db.commit()
+            db.refresh(meeting)
+
+            asyncio.run(summarize_meeting(db, meeting))
+            indexed_path = f"project-deposits/{project.id}/meetings/{meeting.id}.md"
+            knowledge_file = db.query(models.KnowledgeFile).filter_by(filepath=indexed_path).one()
+            knowledge_file_id = knowledge_file.id
+
+            result = delete_project_meeting(project.id, meeting.id, db)
+
+            self.assertTrue(result["deleted"])
+            self.assertIsNone(db.get(models.Meeting, meeting.id))
+            self.assertIsNone(db.get(models.KnowledgeFile, knowledge_file_id))
+            self.assertEqual(db.query(models.KnowledgeChunk).filter_by(file_id=knowledge_file_id).count(), 0)
+        finally:
+            db.close()
+
+    def test_delete_project_meeting_rejects_meeting_from_another_project(self):
+        db = self.open_temp_db()
+        try:
+            project = models.Project(name="会议项目")
+            other_project = models.Project(name="其他项目")
+            meeting = models.Meeting(title="其他项目会议")
+            other_project.meetings = [meeting]
+            db.add_all([project, other_project])
+            db.commit()
+            db.refresh(meeting)
+
+            with self.assertRaises(Exception) as context:
+                delete_project_meeting(project.id, meeting.id, db)
+
+            self.assertEqual(context.exception.status_code, 404)
+            self.assertIsNotNone(db.get(models.Meeting, meeting.id))
         finally:
             db.close()
 

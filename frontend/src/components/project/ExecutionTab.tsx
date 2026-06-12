@@ -5,6 +5,7 @@ import {
   type AgentRun,
   type ProjectDetail,
 } from '../../lib/projectsApi';
+import { compactReferenceLabel, uniqueExecutionReferences } from './executionReferences';
 
 type Props = {
   projectId: string;
@@ -133,7 +134,7 @@ export function ExecutionTab({ projectId, project, onRefresh }: Props) {
 
           {activeRun && (() => {
             const output = parseOutput(activeRun);
-            const refs = output.references ?? [];
+            const refs = uniqueExecutionReferences(output.references ?? []);
             const asked = parseInstruction(activeRun) || '项目执行';
             return (
               <>
@@ -149,14 +150,18 @@ export function ExecutionTab({ projectId, project, onRefresh }: Props) {
                     </div>
                     <p className="whitespace-pre-wrap text-sm leading-7">{output.answer || '暂无输出'}</p>
                     {refs.length > 0 && (
-                      <div className="mt-3 space-y-2 border-t border-[#333333] pt-3">
-                        {refs.slice(0, 5).map((ref, index) => (
-                          <div key={`${ref.source_path}-${index}`} className="rounded-lg bg-[#0E0E0E] p-3 text-xs text-zinc-500">
-                            <div className="mb-1 text-zinc-300">{ref.heading || '未命名片段'}</div>
-                            <div className="break-all">{ref.source_path}</div>
-                            {ref.quote && <p className="mt-1 leading-5">{ref.quote.slice(0, 180)}</p>}
-                          </div>
+                      <div className="mt-3 flex flex-wrap items-center gap-1.5 border-t border-[#333333] pt-2 text-[11px] text-zinc-500">
+                        <span>引用</span>
+                        {refs.slice(0, 4).map((ref, index) => (
+                          <span
+                            key={`${ref.source_path || compactReferenceLabel(ref)}-${index}`}
+                            title={ref.source_path || ref.quote || compactReferenceLabel(ref)}
+                            className="max-w-[180px] truncate rounded border border-white/10 bg-[#0E0E0E] px-2 py-1 text-zinc-400"
+                          >
+                            {compactReferenceLabel(ref)}
+                          </span>
                         ))}
+                        {refs.length > 4 && <span>+{refs.length - 4}</span>}
                       </div>
                     )}
                   </div>
