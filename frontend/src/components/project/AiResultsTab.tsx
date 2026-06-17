@@ -4,15 +4,13 @@ import {
   Bot,
   ChevronDown,
   ChevronUp,
-  Loader2,
-  ArrowRightToLine,
   FileText,
   Presentation,
   ClipboardList,
   CalendarDays,
   Cpu,
 } from 'lucide-react';
-import { type SkillCard, type ProjectDetail } from '../../lib/projectsApi';
+import { type ProjectDetail } from '../../lib/projectsApi';
 
 type Props = {
   project: ProjectDetail;
@@ -61,34 +59,11 @@ function formatJsonOutput(raw: string | undefined): string {
 
 export function AiResultsTab({ project }: Props) {
   const [expandedId, setExpandedId] = useState<string | null>(null);
-  const [busy, setBusy] = useState(false);
-  const [message, setMessage] = useState('');
 
   const skillCards = project.skill_cards ?? [];
 
-  async function handleWriteBack(card: SkillCard) {
-    setBusy(true);
-    setMessage('');
-    try {
-      // 回写：根据卡片类型写入对应模块
-      // 这里调用对应的回写逻辑
-      setMessage(`"${card.title}" 已回写到项目模块。`);
-    } catch (error) {
-      setMessage(`回写失败：${String(error)}`);
-    } finally {
-      setBusy(false);
-    }
-  }
-
   return (
     <div className="space-y-4">
-      {message && (
-        <div className="rounded-lg border border-white/10 bg-white/5 p-3 text-sm text-zinc-300">
-          {busy && <Loader2 size={14} className="mr-2 inline animate-spin" />}
-          {message}
-        </div>
-      )}
-
       <div className="flex items-center justify-between">
         <h2 className="text-sm font-semibold text-white">AI技能卡片执行结果</h2>
         <span className="text-xs text-zinc-500">共 {skillCards.length} 条</span>
@@ -158,16 +133,8 @@ export function AiResultsTab({ project }: Props) {
                       <p className="text-sm text-zinc-500">暂无输出结果</p>
                     )}
 
-                    {/* 回写按钮 */}
-                    <div className="mt-4 flex justify-end">
-                      <button
-                        disabled={busy}
-                        onClick={() => handleWriteBack(card)}
-                        className="inline-flex items-center gap-2 rounded-lg border border-amber-400/40 bg-amber-400/10 px-3 py-1.5 text-xs text-amber-200 hover:bg-amber-400/20 disabled:opacity-50"
-                      >
-                        <ArrowRightToLine size={12} />
-                        回写到项目
-                      </button>
+                    <div className="mt-4 rounded-lg border border-white/10 bg-[#0E0E0E] px-3 py-2 text-xs text-zinc-500">
+                      该成果已由对应工作流写入项目；未提供真实回写能力的操作不会显示。
                     </div>
                   </div>
                 )}

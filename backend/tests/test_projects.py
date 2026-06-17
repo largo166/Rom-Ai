@@ -9,7 +9,7 @@ from sqlalchemy.orm import sessionmaker
 from app import models, schemas
 from app.database import Base
 from app.services import delete_project_library, search_knowledge, summarize_meeting
-from app.routes.projects import assign_project_task, create_project_meeting, create_project_task, delete_project_meeting, sync_tencent_project_meeting_minutes, update_project_task
+from app.routes.projects import assign_project_task, create_project_meeting, create_project_task, delete_project_execution_run, delete_project_file, delete_project_meeting, delete_project_task, parse_one_project_file, preview_project_file, sync_tencent_project_meeting_minutes, update_project_task
 from app.routes.team import (
     add_team_member,
     get_all_members,
@@ -144,10 +144,17 @@ class ProjectTeamWorkflowTest(unittest.TestCase):
 
             asyncio.run(summarize_meeting(db, meeting))
             chunks = search_knowledge(db, "真实会议 消防登高面 日照退界", limit=5)
+            summary_file = db.query(models.KnowledgeFile).filter_by(
+                filepath=f"project-deposits/{project.id}/meetings/{meeting.id}.md"
+            ).one()
 
             self.assertTrue(chunks)
             self.assertTrue(any("消防登高面" in chunk.content for chunk in chunks))
-            self.assertTrue(any(f"project-deposits/{project.id}/meetings/{meeting.id}.md" in chunk.path for chunk in chunks))
+            self.assertTrue(any(f"project-deposits/{project.id}/meeting-transcripts/{meeting.id}.md" in chunk.path for chunk in chunks))
+            summary_content = "\n".join(
+                chunk.content for chunk in db.query(models.KnowledgeChunk).filter_by(file_id=summary_file.id)
+            )
+            self.assertNotIn("韩暄：真实会议确认", summary_content)
         finally:
             db.close()
 
@@ -179,12 +186,17 @@ class ProjectTeamWorkflowTest(unittest.TestCase):
             indexed_path = f"project-deposits/{project.id}/meetings/{meeting.id}.md"
             knowledge_file = db.query(models.KnowledgeFile).filter_by(filepath=indexed_path).one()
             knowledge_file_id = knowledge_file.id
+            transcript_file = db.query(models.KnowledgeFile).filter_by(
+                filepath=f"project-deposits/{project.id}/meeting-transcripts/{meeting.id}.md"
+            ).one()
+            transcript_file_id = transcript_file.id
 
             result = delete_project_meeting(project.id, meeting.id, db)
 
             self.assertTrue(result["deleted"])
             self.assertIsNone(db.get(models.Meeting, meeting.id))
             self.assertIsNone(db.get(models.KnowledgeFile, knowledge_file_id))
+            self.assertIsNone(db.get(models.KnowledgeFile, transcript_file_id))
             self.assertEqual(db.query(models.KnowledgeChunk).filter_by(file_id=knowledge_file_id).count(), 0)
         finally:
             db.close()
@@ -274,7 +286,77 @@ class ProjectTeamWorkflowTest(unittest.TestCase):
             self.assertEqual(task.task_name, "整理启动资料")
             self.assertEqual(updated.status, "doing")
             self.assertEqual(db.query(models.ProjectTask).filter_by(project_id=project.id).count(), 1)
-            self.assertEqual(db.query(models.Task).filter_by(project_id=project.id).count(), 0)
+        finally:
+            db.close()
+
+    def test_project_task_can_be_fully_edited_and_deleted(self):
+        db = self.open_temp_db()
+        try:
+            project = models.Project(name="任务项目")
+            db.add(project)
+            db.commit()
+            task = create_project_task(project.id, schemas.ProjectTaskCreate(task_name="初始任务"), db)
+
+            updated = update_project_task(
+                project.id,
+                task.id,
+                schemas.ProjectTaskUpdate(task_name="复核方案", risk_level="high", output_requirement="复核清单"),
+                db,
+            )
+            result = delete_project_task(project.id, task.id, db)
+
+            self.assertEqual(updated.task_name, "复核方案")
+            self.assertEqual(updated.risk_level, "high")
+            self.assertEqual(updated.output_requirement, "复核清单")
+            self.assertTrue(result["deleted"])
+            self.assertIsNone(db.get(models.ProjectTask, task.id))
+        finally:
+            db.close()
+
+    def test_project_file_can_be_previewed_reparsed_and_safely_deleted(self):
+        with TemporaryDirectory() as tmp:
+            db = self.open_temp_db()
+            try:
+                path = Path(tmp) / "资料.txt"
+                path.write_text("真实项目资料", encoding="utf-8")
+                project = models.Project(name="资料项目")
+                project_file = models.ProjectFile(filename=path.name, filepath=str(path), parsed_text="旧内容")
+                project.files = [project_file]
+                db.add(project)
+                db.commit()
+                db.refresh(project_file)
+
+                preview = preview_project_file(project.id, project_file.id, db)
+                parsed = parse_one_project_file(project.id, project_file.id, db)
+                result = delete_project_file(project.id, project_file.id, db)
+
+                self.assertEqual(preview["content"], "旧内容")
+                self.assertIn("真实项目资料", parsed.parsed_text)
+                self.assertTrue(result["deleted"])
+                self.assertTrue(path.exists())
+            finally:
+                db.close()
+
+    def test_execution_history_delete_only_removes_project_execution_run(self):
+        db = self.open_temp_db()
+        try:
+            project = models.Project(name="执行台项目")
+            execution_run = models.AgentRun(agent_id="project-execution")
+            other_run = models.AgentRun(agent_id="project-parser")
+            project.agent_runs = [execution_run, other_run]
+            db.add(project)
+            db.commit()
+            db.refresh(execution_run)
+            db.refresh(other_run)
+
+            result = delete_project_execution_run(project.id, execution_run.id, db)
+
+            self.assertTrue(result["deleted"])
+            self.assertIsNone(db.get(models.AgentRun, execution_run.id))
+            self.assertIsNotNone(db.get(models.AgentRun, other_run.id))
+            with self.assertRaises(Exception) as context:
+                delete_project_execution_run(project.id, other_run.id, db)
+            self.assertEqual(context.exception.status_code, 404)
         finally:
             db.close()
 

@@ -103,7 +103,7 @@ export function MeetingsTab({ projectId, meetings, onRefresh }: Props) {
           end_time: `${newEndDate}:00+08:00`,
           agenda: newNotes,
         });
-        const joinUrl = extractTencentJoinUrl(meeting.meeting_link);
+        const joinUrl = meeting.tencent_join_url || extractTencentJoinUrl(meeting.meeting_link);
         if (joinUrl) {
           window.open(joinUrl, '_blank', 'noopener,noreferrer');
         }
@@ -338,6 +338,8 @@ export function MeetingsTab({ projectId, meetings, onRefresh }: Props) {
               isLongTranscript && !isTranscriptExpanded
                 ? `${transcriptLines.slice(0, TRANSCRIPT_PREVIEW_LINES).join('\n').trimEnd()}\n…`
                 : meeting.transcript;
+            const joinUrl = meeting.tencent_join_url || extractTencentJoinUrl(meeting.meeting_link);
+            const recordingUrl = meeting.recording_view_url || extractTencentRecordingUrl(meeting.meeting_link);
             return (
               <div
                 key={meeting.id}
@@ -379,23 +381,23 @@ export function MeetingsTab({ projectId, meetings, onRefresh }: Props) {
                       </div>
                     )}
 
-                    {meeting.meeting_link && (
+                    {(meeting.meeting_link || joinUrl || meeting.tencent_meeting_id) && (
                       <div className="mb-4">
                         <div className="mb-2 flex items-center justify-between gap-3">
                           <div className="text-xs font-medium text-blue-300">腾讯会议</div>
                           <div className="flex items-center gap-2">
-                            {extractTencentRecordingUrl(meeting.meeting_link) && (
+                            {recordingUrl && (
                               <button
-                                onClick={() => window.open(extractTencentRecordingUrl(meeting.meeting_link), '_blank', 'noopener,noreferrer')}
+                                onClick={() => window.open(recordingUrl, '_blank', 'noopener,noreferrer')}
                                 className="inline-flex items-center gap-1.5 rounded-lg border border-purple-400/30 bg-purple-400/10 px-2.5 py-1.5 text-xs text-purple-200 hover:bg-purple-400/20"
                               >
                                 <Play size={12} />
                                 查看录屏
                               </button>
                             )}
-                            {extractTencentJoinUrl(meeting.meeting_link) && (
+                            {joinUrl && (
                               <button
-                                onClick={() => window.open(extractTencentJoinUrl(meeting.meeting_link), '_blank', 'noopener,noreferrer')}
+                                onClick={() => window.open(joinUrl, '_blank', 'noopener,noreferrer')}
                                 className="rounded-lg border border-blue-400/30 bg-blue-400/10 px-2.5 py-1.5 text-xs text-blue-200 hover:bg-blue-400/20"
                               >
                                 进入会议
@@ -413,8 +415,14 @@ export function MeetingsTab({ projectId, meetings, onRefresh }: Props) {
                         </div>
                         <div className="rounded-lg border border-white/10 bg-[#0E0E0E] px-3 py-2.5 text-xs text-zinc-500">
                           已关联腾讯会议
-                          {extractTencentRecordingUrl(meeting.meeting_link) && ' · 已获取会议录屏'}
+                          {recordingUrl && ' · 已获取会议录屏'}
+                          {meeting.last_synced_at && ` · 最近同步 ${formatDate(meeting.last_synced_at)}`}
                         </div>
+                        {meeting.sync_status === 'failed' && meeting.sync_error && (
+                          <div className="mt-2 rounded-lg border border-red-400/20 bg-red-400/5 px-3 py-2 text-xs text-red-300">
+                            上次同步失败：{meeting.sync_error}
+                          </div>
+                        )}
                       </div>
                     )}
 

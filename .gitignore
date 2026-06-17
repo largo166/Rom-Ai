@@ -4,6 +4,7 @@ backend/.env
 backend/data/
 backend/uploads/
 backend/C:*uploads/
+backend/C__/
 backend/cloud/
 
 # Dependencies and virtual environments
@@ -19,15 +20,18 @@ dist/
 frontend/dist/
 backend_dist/
 release/
+backend/build/
 
 # Python and tool caches
 __pycache__/
 *.py[cod]
+*.log
 .pytest_cache/
 .mypy_cache/
 
 # OS and editor files
 .DS_Store
+__MACOSX/
 Thumbs.db
 .idea/
 .vscode/

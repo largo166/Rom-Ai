@@ -18,10 +18,10 @@ def boss_dashboard(db: Session = Depends(get_db)):
     active_projects = db.scalar(select(func.count(models.Project.id)).where(models.Project.status == "active")) or 0
     completed_projects = db.scalar(select(func.count(models.Project.id)).where(models.Project.status == "completed")) or 0
 
-    task_total = db.scalar(select(func.count(models.Task.id))) or 0
-    task_todo = db.scalar(select(func.count(models.Task.id)).where(models.Task.status == "todo")) or 0
-    task_in_progress = db.scalar(select(func.count(models.Task.id)).where(models.Task.status == "in_progress")) or 0
-    task_done = db.scalar(select(func.count(models.Task.id)).where(models.Task.status == "done")) or 0
+    task_total = db.scalar(select(func.count(models.ProjectTask.id))) or 0
+    task_todo = db.scalar(select(func.count(models.ProjectTask.id)).where(models.ProjectTask.status == "todo")) or 0
+    task_in_progress = db.scalar(select(func.count(models.ProjectTask.id)).where(models.ProjectTask.status.in_(["doing", "in_progress"]))) or 0
+    task_done = db.scalar(select(func.count(models.ProjectTask.id)).where(models.ProjectTask.status.in_(["done", "completed"]))) or 0
 
     meeting_total = db.scalar(select(func.count(models.Meeting.id))) or 0
     meeting_scheduled = db.scalar(select(func.count(models.Meeting.id)).where(models.Meeting.status == "scheduled")) or 0

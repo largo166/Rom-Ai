@@ -18,6 +18,7 @@ from app.services import (
     ensure_project_sidecars,
     mock_analysis_payload,
     normalize_analysis_payload,
+    parse_tencent_meeting_result,
     parse_document,
     project_upload_dir,
     run_project_execution,
@@ -128,6 +129,58 @@ def parse_project_files(project_id: str, db: Session = Depends(get_db)):
     return parsed_files or project.files
 
 
+@router.get("/{project_id}/files/{file_id}/preview")
+def preview_project_file(project_id: str, file_id: str, db: Session = Depends(get_db)):
+    file = db.scalar(
+        select(models.ProjectFile).where(models.ProjectFile.id == file_id, models.ProjectFile.project_id == project_id)
+    )
+    if not file:
+        raise HTTPException(status_code=404, detail="项目资料不存在")
+    return {
+        "id": file.id,
+        "filename": file.filename,
+        "parse_status": file.parse_status,
+        "content": file.parsed_text or "",
+    }
+
+
+@router.post("/{project_id}/files/{file_id}/parse", response_model=schemas.ProjectFileOut)
+def parse_one_project_file(project_id: str, file_id: str, db: Session = Depends(get_db)):
+    file = db.scalar(
+        select(models.ProjectFile).where(models.ProjectFile.id == file_id, models.ProjectFile.project_id == project_id)
+    )
+    if not file:
+        raise HTTPException(status_code=404, detail="项目资料不存在")
+    text, status = parse_document(Path(file.filepath))
+    file.parsed_text = text
+    file.parse_status = status
+    file.analysis_status = "pending"
+    mirror_project_parse(project_id, file.id, file.filename, text, status)
+    db.commit()
+    db.refresh(file)
+    return file
+
+
+@router.delete("/{project_id}/files/{file_id}")
+def delete_project_file(project_id: str, file_id: str, db: Session = Depends(get_db)):
+    file = db.scalar(
+        select(models.ProjectFile).where(models.ProjectFile.id == file_id, models.ProjectFile.project_id == project_id)
+    )
+    if not file:
+        raise HTTPException(status_code=404, detail="项目资料不存在")
+    path = Path(file.filepath)
+    managed_root = project_upload_dir(project_id).resolve()
+    try:
+        resolved = path.resolve()
+        if resolved.is_relative_to(managed_root) and resolved.exists():
+            resolved.unlink()
+    except OSError:
+        pass
+    db.delete(file)
+    db.commit()
+    return {"deleted": True, "deleted_file_id": file_id}
+
+
 @router.post("/{project_id}/analyze", response_model=schemas.ProjectAnalyzeOut)
 async def analyze_project(payload: schemas.ProjectAnalyzeRequest, project_id: str, db: Session = Depends(get_db)):
     project = crud.get_project(db, project_id)
@@ -155,7 +208,11 @@ async def analyze_project(payload: schemas.ProjectAnalyzeRequest, project_id: st
             analysis_payload = normalize_analysis_payload(deepseek_payload, fallback_payload)
             analysis_payload["mode"] = "deepseek"
             mode = "deepseek"
-    except Exception:
+        elif not settings.mock_mode:
+            raise RuntimeError("DeepSeek 未返回有效分析结果")
+    except Exception as exc:
+        if not settings.mock_mode:
+            raise HTTPException(status_code=502, detail=f"DeepSeek 分析失败：{exc}") from exc
         analysis_payload["mode"] = "mock"
         mode = "mock"
     if payload.auto_fetch_knowledge and not analysis_payload.get("knowledge_refs"):
@@ -197,7 +254,10 @@ async def create_startup_analysis(
         project = crud.get_project(db, project_id)
         if not project:
             raise HTTPException(status_code=404, detail="项目不存在")
-    result = await run_startup_analysis(db, project)
+    try:
+        result = await run_startup_analysis(db, project)
+    except RuntimeError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
     return _startup_response(result["report"])
 
 
@@ -275,6 +335,18 @@ def update_project_task(project_id: str, task_id: str, payload: schemas.ProjectT
     db.commit()
     db.refresh(task)
     return task
+
+
+@router.delete("/{project_id}/tasks/{task_id}")
+def delete_project_task(project_id: str, task_id: str, db: Session = Depends(get_db)):
+    task = db.scalar(
+        select(models.ProjectTask).where(models.ProjectTask.id == task_id, models.ProjectTask.project_id == project_id)
+    )
+    if not task:
+        raise HTTPException(status_code=404, detail="任务不存在")
+    db.delete(task)
+    db.commit()
+    return {"deleted": True, "deleted_task_id": task_id}
 
 
 @router.put("/{project_id}/tasks/{task_id}/assignee", response_model=schemas.ProjectTaskOut)
@@ -389,6 +461,22 @@ def project_agent_runs(project_id: str, db: Session = Depends(get_db)):
     return project.agent_runs
 
 
+@router.delete("/{project_id}/agent-runs/{run_id}")
+def delete_project_execution_run(project_id: str, run_id: str, db: Session = Depends(get_db)):
+    run = db.scalar(
+        select(models.AgentRun).where(
+            models.AgentRun.id == run_id,
+            models.AgentRun.project_id == project_id,
+            models.AgentRun.agent_id == "project-execution",
+        )
+    )
+    if not run:
+        raise HTTPException(status_code=404, detail="执行台问答记录不存在")
+    db.delete(run)
+    db.commit()
+    return {"deleted": True, "deleted_run_id": run_id}
+
+
 @router.post("/{project_id}/execute", response_model=schemas.AgentRunOut)
 async def execute_project_instruction(
     project_id: str,
@@ -430,11 +518,15 @@ def create_project_meeting(project_id: str, payload: schemas.ProjectMeetingCreat
     project = crud.get_project(db, project_id)
     if not project:
         raise HTTPException(status_code=404, detail="项目不存在")
+    tencent = parse_tencent_meeting_result(payload.meeting_link)
     meeting = models.Meeting(
         project_id=project.id,
         title=payload.title,
         agenda=payload.agenda,
         recording_url=payload.meeting_link,
+        tencent_join_url=tencent.get("join_url", ""),
+        tencent_meeting_code=tencent.get("meeting_code", ""),
+        tencent_meeting_id=tencent.get("meeting_id", ""),
         transcript=payload.transcript,
         status=payload.status if payload.status != "planned" else "scheduled",
     )
@@ -453,13 +545,16 @@ def delete_project_meeting(project_id: str, meeting_id: str, db: Session = Depen
     if not meeting or meeting.project_id != project_id:
         raise HTTPException(status_code=404, detail="会议不存在")
 
-    indexed_path = f"project-deposits/{project_id}/meetings/{meeting_id}.md"
-    knowledge_file = db.scalar(select(models.KnowledgeFile).where(models.KnowledgeFile.filepath == indexed_path))
-    if knowledge_file:
-        db.execute(delete(models.KnowledgeChunk).where(models.KnowledgeChunk.file_id == knowledge_file.id))
-        db.execute(delete(models.KnowledgeTag).where(models.KnowledgeTag.file_id == knowledge_file.id))
-        db.execute(delete(models.KnowledgeLink).where(models.KnowledgeLink.file_id == knowledge_file.id))
-        db.delete(knowledge_file)
+    for indexed_path in (
+        f"project-deposits/{project_id}/meetings/{meeting_id}.md",
+        f"project-deposits/{project_id}/meeting-transcripts/{meeting_id}.md",
+    ):
+        knowledge_file = db.scalar(select(models.KnowledgeFile).where(models.KnowledgeFile.filepath == indexed_path))
+        if knowledge_file:
+            db.execute(delete(models.KnowledgeChunk).where(models.KnowledgeChunk.file_id == knowledge_file.id))
+            db.execute(delete(models.KnowledgeTag).where(models.KnowledgeTag.file_id == knowledge_file.id))
+            db.execute(delete(models.KnowledgeLink).where(models.KnowledgeLink.file_id == knowledge_file.id))
+            db.delete(knowledge_file)
 
     db.delete(meeting)
     db.commit()
@@ -501,6 +596,9 @@ def create_tencent_project_meeting(project_id: str, payload: schemas.TencentMeet
         date=meeting_date,
         agenda=payload.agenda,
         recording_url="\n".join(link_lines),
+        tencent_join_url=tencent.get("join_url", ""),
+        tencent_meeting_code=tencent.get("meeting_code", ""),
+        tencent_meeting_id=tencent.get("meeting_id", ""),
         status="scheduled",
     )
     db.add(meeting)
@@ -520,8 +618,14 @@ def sync_tencent_project_meeting_minutes(project_id: str, meeting_id: str, db: S
     try:
         return sync_tencent_meeting_minutes(db, meeting)
     except TencentMinutesUnavailableError as exc:
+        meeting.sync_status = "failed"
+        meeting.sync_error = str(exc)
+        db.commit()
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     except Exception as exc:
+        meeting.sync_status = "failed"
+        meeting.sync_error = str(exc)
+        db.commit()
         raise HTTPException(status_code=502, detail=f"同步腾讯会议纪要失败：{exc}") from exc
 
 

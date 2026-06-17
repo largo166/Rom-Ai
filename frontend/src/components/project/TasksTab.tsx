@@ -5,11 +5,13 @@ import {
   MoreHorizontal,
   AlertCircle,
   User,
+  Trash2,
   X,
 } from 'lucide-react';
 import {
   assignProjectTask,
   createProjectTask,
+  deleteProjectTask,
   type ProjectDetail,
   type ProjectTask,
   updateProjectTask,
@@ -22,6 +24,7 @@ type Props = {
   focusTaskId?: string;
   onRefresh: () => void;
   onOpenMember?: (memberId: string) => void;
+  onOpenMeeting?: () => void;
 };
 
 const columns = [
@@ -51,13 +54,19 @@ function getSourceTag(task: ProjectTask) {
   return { label: '手动', color: 'text-zinc-400 bg-zinc-500/10' };
 }
 
-export function TasksTab({ projectId, project, tasks, focusTaskId = '', onRefresh, onOpenMember }: Props) {
+export function TasksTab({ projectId, project, tasks, focusTaskId = '', onRefresh, onOpenMember, onOpenMeeting }: Props) {
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState('');
   const [showAddModal, setShowAddModal] = useState(false);
   const [menuTaskId, setMenuTaskId] = useState<string | null>(null);
   const [assignTask, setAssignTask] = useState<ProjectTask | null>(null);
+  const [editTask, setEditTask] = useState<ProjectTask | null>(null);
   const [selectedAssigneeKey, setSelectedAssigneeKey] = useState('');
+  const [editName, setEditName] = useState('');
+  const [editPriority, setEditPriority] = useState('medium');
+  const [editRisk, setEditRisk] = useState('low');
+  const [editDueDate, setEditDueDate] = useState('');
+  const [editOutput, setEditOutput] = useState('');
 
   // 新任务表单
   const [newTaskName, setNewTaskName] = useState('');
@@ -126,6 +135,53 @@ export function TasksTab({ projectId, project, tasks, focusTaskId = '', onRefres
       setMessage('负责人已更新。');
     } catch (error) {
       setMessage(`分配失败：${String(error)}`);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function handleDeleteTask(task: ProjectTask) {
+    if (!window.confirm(`确认删除任务“${task.task_name}”？`)) return;
+    setBusy(true);
+    setMenuTaskId(null);
+    try {
+      await deleteProjectTask(projectId, task.id);
+      await onRefresh();
+      setMessage('任务已删除。');
+    } catch (error) {
+      setMessage(`删除失败：${String(error)}`);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  function openEditTask(task: ProjectTask) {
+    setEditTask(task);
+    setEditName(task.task_name);
+    setEditPriority(task.priority || 'medium');
+    setEditRisk(task.risk_level || 'low');
+    setEditDueDate(task.due_date ? task.due_date.slice(0, 10) : '');
+    setEditOutput(task.output_requirement || '');
+    setMenuTaskId(null);
+  }
+
+  async function handleEditTask() {
+    if (!editTask || !editName.trim()) return;
+    setBusy(true);
+    setMessage('');
+    try {
+      await updateProjectTask(projectId, editTask.id, {
+        task_name: editName.trim(),
+        priority: editPriority,
+        risk_level: editRisk,
+        due_date: editDueDate ? new Date(`${editDueDate}T00:00:00`).toISOString() : null,
+        output_requirement: editOutput,
+      });
+      setEditTask(null);
+      await onRefresh();
+      setMessage('任务已更新。');
+    } catch (error) {
+      setMessage(`更新失败：${String(error)}`);
     } finally {
       setBusy(false);
     }
@@ -261,6 +317,43 @@ export function TasksTab({ projectId, project, tasks, focusTaskId = '', onRefres
         </div>
       )}
 
+      {editTask && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm">
+          <div className="w-full max-w-lg rounded-xl border border-white/10 bg-[#171717] p-6">
+            <div className="mb-4 flex items-center justify-between">
+              <h3 className="text-lg font-semibold text-white">编辑任务</h3>
+              <button onClick={() => setEditTask(null)} className="text-zinc-500 hover:text-white"><X size={20} /></button>
+            </div>
+            <div className="space-y-4">
+              <label className="block text-xs text-zinc-500">任务名称
+                <input value={editName} onChange={(event) => setEditName(event.target.value)} className="mt-1 w-full rounded-lg border border-white/10 bg-white/5 px-3 py-2.5 text-sm text-zinc-200 outline-none focus:border-amber-400/60" />
+              </label>
+              <div className="grid grid-cols-3 gap-3">
+                <label className="block text-xs text-zinc-500">优先级
+                  <select value={editPriority} onChange={(event) => setEditPriority(event.target.value)} className="mt-1 w-full rounded-lg border border-white/10 bg-white/5 px-3 py-2.5 text-sm text-zinc-200">
+                    <option value="high">高</option><option value="medium">中</option><option value="low">低</option>
+                  </select>
+                </label>
+                <label className="block text-xs text-zinc-500">风险
+                  <select value={editRisk} onChange={(event) => setEditRisk(event.target.value)} className="mt-1 w-full rounded-lg border border-white/10 bg-white/5 px-3 py-2.5 text-sm text-zinc-200">
+                    <option value="high">高</option><option value="medium">中</option><option value="low">低</option>
+                  </select>
+                </label>
+                <label className="block text-xs text-zinc-500">截止日期
+                  <input type="date" value={editDueDate} onChange={(event) => setEditDueDate(event.target.value)} className="mt-1 w-full rounded-lg border border-white/10 bg-white/5 px-3 py-2.5 text-sm text-zinc-200" />
+                </label>
+              </div>
+              <label className="block text-xs text-zinc-500">交付物要求
+                <textarea value={editOutput} onChange={(event) => setEditOutput(event.target.value)} rows={3} className="mt-1 w-full rounded-lg border border-white/10 bg-white/5 px-3 py-2.5 text-sm text-zinc-200 outline-none focus:border-amber-400/60" />
+              </label>
+              <button onClick={handleEditTask} disabled={busy || !editName.trim()} className="w-full rounded-lg bg-amber-400 py-2.5 text-sm font-semibold text-black disabled:opacity-50">
+                {busy ? <Loader2 size={16} className="mx-auto animate-spin" /> : '保存修改'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* 看板三列 */}
       <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
         {columns.map((col) => {
@@ -316,6 +409,12 @@ export function TasksTab({ projectId, project, tasks, focusTaskId = '', onRefres
                                   </button>
                                 )}
                                 <button
+                                  onClick={() => openEditTask(task)}
+                                  className="w-full rounded px-2 py-1.5 text-left text-xs text-amber-300 hover:bg-white/5"
+                                >
+                                  编辑任务
+                                </button>
+                                <button
                                   onClick={() => {
                                     setAssignTask(task);
                                     setSelectedAssigneeKey(task.assignee_id ? `${task.assignee_type}:${task.assignee_id}` : '');
@@ -324,6 +423,12 @@ export function TasksTab({ projectId, project, tasks, focusTaskId = '', onRefres
                                   className="w-full rounded px-2 py-1.5 text-left text-xs text-violet-300 hover:bg-white/5"
                                 >
                                   分配负责人
+                                </button>
+                                <button
+                                  onClick={() => handleDeleteTask(task)}
+                                  className="w-full rounded px-2 py-1.5 text-left text-xs text-red-300 hover:bg-white/5"
+                                >
+                                  <span className="inline-flex items-center gap-1"><Trash2 size={11} />删除任务</span>
                                 </button>
                               </div>
                             )}
@@ -354,6 +459,14 @@ export function TasksTab({ projectId, project, tasks, focusTaskId = '', onRefres
                           <span className={`rounded-full px-1.5 py-0.5 ${source.color}`}>
                             {source.label}
                           </span>
+                          {task.source_type === 'meeting' && (
+                            <button onClick={onOpenMeeting} className="text-blue-300 hover:text-blue-200">
+                              查看来源会议
+                            </button>
+                          )}
+                          {task.due_date && (
+                            <span className="text-zinc-500">截止 {new Date(task.due_date).toLocaleDateString('zh-CN')}</span>
+                          )}
                           {task.risk_level && task.risk_level !== 'low' && (
                             <span className="flex items-center gap-1 text-red-400">
                               <AlertCircle size={10} />

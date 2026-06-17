@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type ChangeEvent } from 'react';
+import { useCallback, useEffect, useRef, useState, type ChangeEvent } from 'react';
 import { Brain, ChevronDown, ChevronUp, Clipboard, FolderOpen, Loader2, Search, Send, ShieldCheck, Trash2, UploadCloud } from 'lucide-react';
 import {
   askKnowledge,
@@ -14,7 +14,7 @@ import {
   type KnowledgeUploadFile,
 } from '../lib/projectsApi';
 
-const DEFAULT_VAULT = 'C:\\Users\\yz_ya\\Documents\\Obsidian Vault';
+const DEFAULT_VAULT = '';
 const MAX_BROWSER_FILES = 360;
 const MAX_BROWSER_TOTAL_BYTES = 120 * 1024 * 1024;
 const MAX_BROWSER_FILE_BYTES = 25 * 1024 * 1024;
@@ -141,7 +141,7 @@ export function KnowledgePage() {
     }
   }
 
-  async function refreshKnowledgeFiles(query = fileQuery) {
+  const refreshKnowledgeFiles = useCallback(async (query: string) => {
     try {
       const result = await listKnowledgeFiles(query, 100);
       setKnowledgeFiles(result.items);
@@ -149,12 +149,12 @@ export function KnowledgePage() {
     } catch (error) {
       setNotice(`读取知识库文件目录失败：${String(error)}`);
     }
-  }
+  }, []);
 
   useEffect(() => {
     refresh();
     refreshKnowledgeFiles('');
-  }, []);
+  }, [refreshKnowledgeFiles]);
 
   useEffect(() => {
     window.localStorage.setItem(CHAT_STORAGE_KEY, JSON.stringify(messages.slice(-MAX_SAVED_MESSAGES)));

@@ -128,7 +128,7 @@ export function InboxPage() {
       cancelled = true;
       window.clearInterval(timer);
     };
-  }, [scanJob?.job_id, scanJob?.status]);
+  }, [scanJob]);
 
   useEffect(() => {
     const nextProjects: Record<string, string> = {};

@@ -1,6 +1,7 @@
 import { useMemo, useState } from 'react';
-import { Bot, Brain, Loader2, Search, Send } from 'lucide-react';
+import { Bot, Brain, Loader2, Search, Send, Trash2 } from 'lucide-react';
 import {
+  deleteProjectExecutionRun,
   executeProjectInstruction,
   type AgentRun,
   type ProjectDetail,
@@ -46,16 +47,19 @@ export function ExecutionTab({ projectId, project, onRefresh }: Props) {
   const [message, setMessage] = useState('');
   const [latestRun, setLatestRun] = useState<AgentRun | null>(null);
   const [activeRunId, setActiveRunId] = useState<string | null>(null);
+  const [deletedRunIds, setDeletedRunIds] = useState<string[]>([]);
 
   const executionRuns = useMemo(
     () =>
       [...(project.agent_runs ?? [])]
-        .filter((run) => run.agent_id === 'project-execution')
+        .filter((run) => run.agent_id === 'project-execution' && !deletedRunIds.includes(run.id))
         .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime()),
-    [project.agent_runs],
+    [deletedRunIds, project.agent_runs],
   );
 
-  const visibleRuns = latestRun ? [latestRun, ...executionRuns.filter((run) => run.id !== latestRun.id)] : executionRuns;
+  const visibleRuns = latestRun && !deletedRunIds.includes(latestRun.id)
+    ? [latestRun, ...executionRuns.filter((run) => run.id !== latestRun.id)]
+    : executionRuns;
   const activeRun = visibleRuns.find((run) => run.id === activeRunId) ?? visibleRuns[0] ?? null;
 
   async function handleExecute() {
@@ -77,6 +81,24 @@ export function ExecutionTab({ projectId, project, onRefresh }: Props) {
     }
   }
 
+  async function handleDelete(run: AgentRun) {
+    if (!window.confirm('确认删除这条执行台问答历史？')) return;
+    setBusy(true);
+    setMessage('');
+    try {
+      await deleteProjectExecutionRun(projectId, run.id);
+      setDeletedRunIds((ids) => [...ids, run.id]);
+      if (latestRun?.id === run.id) setLatestRun(null);
+      if (activeRunId === run.id) setActiveRunId(null);
+      await onRefresh();
+      setMessage('问答历史已删除。');
+    } catch (error) {
+      setMessage(`删除失败：${String(error)}`);
+    } finally {
+      setBusy(false);
+    }
+  }
+
   return (
     <div className="grid grid-cols-1 gap-5 lg:grid-cols-[0.34fr_1fr]">
       <div className="rounded-lg border border-[#333333] bg-[#111111] p-4">
@@ -88,15 +110,30 @@ export function ExecutionTab({ projectId, project, onRefresh }: Props) {
           {visibleRuns.map((run, index) => {
             const isActive = activeRun?.id === run.id;
             return (
-              <button
+              <div
                 key={run.id}
-                onClick={() => setActiveRunId(run.id)}
-                className={`block w-full truncate rounded-lg p-3 text-left text-sm ${
+                className={`flex items-center gap-1 rounded-lg ${
                   isActive ? 'bg-amber-400 text-black' : 'bg-[#171717] text-zinc-300 hover:bg-white/10'
                 }`}
               >
-                对话 {visibleRuns.length - index}：{parseInstruction(run) || '项目执行'}
-              </button>
+                <button
+                  onClick={() => setActiveRunId(run.id)}
+                  className="min-w-0 flex-1 truncate p-3 text-left text-sm"
+                >
+                  对话 {visibleRuns.length - index}：{parseInstruction(run) || '项目执行'}
+                </button>
+                <button
+                  onClick={() => handleDelete(run)}
+                  disabled={busy}
+                  aria-label="删除问答历史"
+                  title="删除问答历史"
+                  className={`mr-2 rounded p-1.5 ${
+                    isActive ? 'hover:bg-black/10' : 'text-zinc-500 hover:bg-red-400/10 hover:text-red-300'
+                  }`}
+                >
+                  <Trash2 size={13} />
+                </button>
+              </div>
             );
           })}
           {!visibleRuns.length && <p className="text-sm text-zinc-500">暂无对话。</p>}

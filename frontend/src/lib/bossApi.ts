@@ -1,7 +1,9 @@
-const API_BASE = (import.meta.env.VITE_API_BASE ?? 'http://127.0.0.1:8000').replace(/\/$/, '');
+﻿import { getApiBase } from './runtime';
+
+const apiBase = () => getApiBase();
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
-  const res = await fetch(`${API_BASE}${path}`, {
+  const res = await fetch(`${apiBase()}${path}`, {
     headers: {
       'Content-Type': 'application/json',
       ...(init?.headers ?? {}),

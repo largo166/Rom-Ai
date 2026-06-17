@@ -1,4 +1,6 @@
-const API_BASE = (import.meta.env.VITE_API_BASE ?? 'http://127.0.0.1:8000').replace(/\/$/, '');
+import { getApiBase } from './runtime';
+
+const apiBase = () => getApiBase();
 
 export type Project = {
   id: string;
@@ -73,6 +75,9 @@ export type ProjectTask = {
   assignee_type: string;
   assignee_id: string;
   assignee_name: string;
+  source_type: string;
+  source_id: string;
+  due_date: string | null;
   created_at: string;
   updated_at: string;
 };
@@ -134,6 +139,15 @@ export type ProjectMeeting = {
   meeting_type: string;
   agenda: string;
   meeting_link: string;
+  tencent_join_url: string;
+  tencent_meeting_code: string;
+  tencent_meeting_id: string;
+  recording_view_url: string;
+  record_file_id: string;
+  sync_status: string;
+  sync_error: string;
+  sync_trace_json: string;
+  last_synced_at: string | null;
   transcript: string;
   summary: string;
   mindmap_json: string;
@@ -291,6 +305,11 @@ export type SettingsStatus = {
   upload_root: string;
   mock_mode: boolean;
   database_url: string;
+  cloud_upload_enabled?: boolean;
+  cloud_upload_root?: string;
+  data_dir?: string;
+  env_file?: string;
+  log_dir?: string;
 };
 
 export type DeepSeekSettingsPayload = {
@@ -481,7 +500,7 @@ export type InboxBatchAdvice = {
 };
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
-  const res = await fetch(`${API_BASE}${path}`, {
+  const res = await fetch(`${apiBase()}${path}`, {
     headers: {
       'Content-Type': 'application/json',
       ...(init?.headers ?? {}),
@@ -510,7 +529,7 @@ export function listInboxItems(params: { status?: string; project_id?: string } 
 export function uploadInboxFiles(files: File[]) {
   const form = new FormData();
   files.forEach((file) => form.append('files', file));
-  return fetch(`${API_BASE}/api/inbox/upload`, {
+  return fetch(`${apiBase()}/api/inbox/upload`, {
     method: 'POST',
     body: form,
   }).then(async (res) => {
@@ -634,7 +653,7 @@ export function listDeepSeekModels() {
 export function uploadProjectFiles(projectId: string, files: File[]) {
   const form = new FormData();
   files.forEach((file) => form.append('files', file));
-  return fetch(`${API_BASE}/api/projects/${projectId}/upload`, {
+  return fetch(`${apiBase()}/api/projects/${projectId}/upload`, {
     method: 'POST',
     body: form,
   }).then(async (res) => {
@@ -648,6 +667,22 @@ export function uploadProjectFiles(projectId: string, files: File[]) {
 
 export function parseProjectFiles(projectId: string) {
   return request<ProjectFile[]>(`/api/projects/${projectId}/parse`, { method: 'POST' });
+}
+
+export function previewProjectFile(projectId: string, fileId: string) {
+  return request<{ id: string; filename: string; parse_status: string; content: string }>(
+    `/api/projects/${projectId}/files/${fileId}/preview`,
+  );
+}
+
+export function parseOneProjectFile(projectId: string, fileId: string) {
+  return request<ProjectFile>(`/api/projects/${projectId}/files/${fileId}/parse`, { method: 'POST' });
+}
+
+export function deleteProjectFile(projectId: string, fileId: string) {
+  return request<{ deleted: boolean; deleted_file_id: string }>(`/api/projects/${projectId}/files/${fileId}`, {
+    method: 'DELETE',
+  });
 }
 
 export function analyzeProject(projectId: string, autoFetchKnowledge = false) {
@@ -707,6 +742,12 @@ export function getProjectTimeline(projectId: string) {
 
 export function getProjectAgentRuns(projectId: string) {
   return request<AgentRun[]>(`/api/projects/${projectId}/agent-runs`);
+}
+
+export function deleteProjectExecutionRun(projectId: string, runId: string) {
+  return request<{ deleted: boolean; deleted_run_id: string }>(`/api/projects/${projectId}/agent-runs/${runId}`, {
+    method: 'DELETE',
+  });
 }
 
 export function createTeamPlan(projectId: string) {
@@ -785,6 +826,12 @@ export function updateProjectTask(projectId: string, taskId: string, payload: Pa
   });
 }
 
+export function deleteProjectTask(projectId: string, taskId: string) {
+  return request<{ deleted: boolean; deleted_task_id: string }>(`/api/projects/${projectId}/tasks/${taskId}`, {
+    method: 'DELETE',
+  });
+}
+
 export function getDashboard() {
   return request<DashboardData>('/api/dashboard');
 }
@@ -829,7 +876,7 @@ export function uploadKnowledgeFiles(files: KnowledgeUploadFile[], clearExisting
     const relativePath = entry instanceof File ? (file as File & { webkitRelativePath?: string }).webkitRelativePath || file.name : entry.relativePath;
     form.append('files', file, relativePath);
   });
-  return fetch(`${API_BASE}/api/knowledge/upload`, {
+  return fetch(`${apiBase()}/api/knowledge/upload`, {
     method: 'POST',
     body: form,
   }).then(async (res) => {

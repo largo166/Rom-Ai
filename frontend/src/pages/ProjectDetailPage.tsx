@@ -1,5 +1,5 @@
-﻿import { useEffect, useMemo, useState } from 'react';
-import { Link, useNavigate, useParams } from 'react-router';
+﻿import { useCallback, useEffect, useMemo, useState } from 'react';
+import { Link, useNavigate, useParams, useSearchParams } from 'react-router';
 import {
   CheckCircle2,
   Circle,
@@ -66,8 +66,12 @@ function getStatusBadge(status: string) {
 export function ProjectDetailPage() {
   const { id } = useParams();
   const navigate = useNavigate();
+  const [searchParams, setSearchParams] = useSearchParams();
+  const initialTab = searchParams.get('tab');
   const [project, setProject] = useState<ProjectDetail | null>(null);
-  const [activeTab, setActiveTab] = useState<TabKey>('overview');
+  const [activeTab, setActiveTab] = useState<TabKey>(
+    tabs.some((tab) => tab.key === initialTab) ? initialTab as TabKey : 'overview',
+  );
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState('');
@@ -78,6 +82,11 @@ export function ProjectDetailPage() {
   const [deleteConfirmName, setDeleteConfirmName] = useState('');
   const [focusTaskId, setFocusTaskId] = useState<string>('');
   const [focusMemberId, setFocusMemberId] = useState<string>('');
+
+  function selectTab(tab: TabKey) {
+    setActiveTab(tab);
+    setSearchParams(tab === 'overview' ? {} : { tab }, { replace: true });
+  }
 
   useEffect(() => {
     if (!busy || !analysisStartedAt) return;
@@ -148,7 +157,7 @@ export function ProjectDetailPage() {
     setAnalysisSteps(makeAnalysisSteps(activeKey));
   }
 
-  async function load() {
+  const load = useCallback(async () => {
     if (!id) return;
     setLoading(true);
     setMessage('');
@@ -159,11 +168,11 @@ export function ProjectDetailPage() {
     } finally {
       setLoading(false);
     }
-  }
+  }, [id]);
 
   useEffect(() => {
     load();
-  }, [id]);
+  }, [load]);
 
   async function runStartup() {
     if (!id) return;
@@ -186,7 +195,7 @@ export function ProjectDetailPage() {
       await load();
       const modeLabel = result.mode === 'deepseek' ? 'DeepSeek 真实分析' : result.mode === 'mock' ? 'Mock 模式分析' : '回退分析';
       setMessage(`项目启动分析已生成（${modeLabel}），技术重点、任务拆解、会议议程已写入。`);
-      setActiveTab('overview');
+      selectTab('overview');
     } catch (error) {
       setAnalysisSteps((steps) => steps.map((step) => (step.status === 'active' ? { ...step, status: 'error' } : step)));
       setMessage(`启动分析失败：${String(error)}`);
@@ -343,7 +352,7 @@ export function ProjectDetailPage() {
                   return (
                     <button
                       key={tab.key}
-                      onClick={() => setActiveTab(tab.key)}
+                      onClick={() => selectTab(tab.key)}
                       className={`relative flex items-center gap-2 whitespace-nowrap px-4 py-3 text-sm transition-colors ${
                         isActive
                           ? 'text-amber-400'
@@ -385,8 +394,9 @@ export function ProjectDetailPage() {
                   onRefresh={load}
                   onOpenMember={(memberId) => {
                     setFocusMemberId(memberId);
-                    setActiveTab('team');
+                    selectTab('team');
                   }}
+                  onOpenMeeting={() => selectTab('meetings')}
                 />
               )}
               {activeTab === 'ai-results' && (
@@ -400,7 +410,7 @@ export function ProjectDetailPage() {
                   onRefresh={load}
                   onOpenTask={(taskId) => {
                     setFocusTaskId(taskId);
-                    setActiveTab('tasks');
+                    selectTab('tasks');
                   }}
                 />
               )}

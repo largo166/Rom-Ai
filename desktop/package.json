@@ -2,6 +2,7 @@
   "name": "rom-ai-desktop",
   "version": "1.0.0",
   "description": "ROM-AI local desktop application",
+  "author": "ROM-AI",
   "main": "main.js",
   "private": true,
   "scripts": {
@@ -19,6 +20,7 @@
   "build": {
     "appId": "com.romai.local",
     "productName": "ROM-AI",
+    "asar": true,
     "directories": {
       "output": "../release"
     },
@@ -32,7 +34,9 @@
         "filter": [
           "**/*"
         ]
-      },
+      }
+    ],
+    "extraResources": [
       {
         "from": "../backend_dist",
         "to": "backend",
@@ -45,6 +49,7 @@
       "main": "main.js"
     },
     "win": {
+      "icon": "build/icon.ico",
       "target": [
         {
           "target": "nsis",

@@ -1,3 +1,5 @@
+import shutil
+from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
@@ -57,6 +59,9 @@ def _ensure_sqlite_columns() -> None:
             "assignee_type": "VARCHAR DEFAULT ''",
             "assignee_id": "VARCHAR DEFAULT ''",
             "assignee_name": "VARCHAR DEFAULT ''",
+            "source_type": "VARCHAR DEFAULT ''",
+            "source_id": "VARCHAR DEFAULT ''",
+            "due_date": "DATETIME",
         },
         "knowledge_references": {
             "created_at": "DATETIME DEFAULT CURRENT_TIMESTAMP",
@@ -74,6 +79,15 @@ def _ensure_sqlite_columns() -> None:
             "minutes": "TEXT DEFAULT ''",
             "todos": "TEXT DEFAULT '[]'",
             "recording_url": "VARCHAR DEFAULT ''",
+            "tencent_join_url": "VARCHAR DEFAULT ''",
+            "tencent_meeting_code": "VARCHAR DEFAULT ''",
+            "tencent_meeting_id": "VARCHAR DEFAULT ''",
+            "recording_view_url": "VARCHAR DEFAULT ''",
+            "record_file_id": "VARCHAR DEFAULT ''",
+            "sync_status": "VARCHAR DEFAULT 'not_synced'",
+            "sync_error": "TEXT DEFAULT ''",
+            "sync_trace_json": "TEXT DEFAULT '{}'",
+            "last_synced_at": "DATETIME",
             "transcript": "TEXT DEFAULT ''",
             "summary": "TEXT DEFAULT ''",
             "mindmap_json": "TEXT DEFAULT '{}'",
@@ -112,6 +126,7 @@ def _ensure_sqlite_columns() -> None:
             "archive_group": "VARCHAR DEFAULT '待确认'",
         },
     }
+    backup_created = False
     with engine.begin() as conn:
         for table, columns in additions.items():
             existing = {row[1] for row in conn.exec_driver_sql(f"PRAGMA table_info({table})")}
@@ -119,6 +134,12 @@ def _ensure_sqlite_columns() -> None:
                 continue
             for name, definition in columns.items():
                 if name not in existing:
+                    if not backup_created and sqlite_path and sqlite_path.exists():
+                        backup_dir = sqlite_path.parent / "backups"
+                        backup_dir.mkdir(parents=True, exist_ok=True)
+                        timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+                        shutil.copy2(sqlite_path, backup_dir / f"{sqlite_path.stem}-pre-migration-{timestamp}{sqlite_path.suffix}")
+                        backup_created = True
                     conn.exec_driver_sql(f"ALTER TABLE {table} ADD COLUMN {name} {definition}")
         conn.exec_driver_sql(
             """

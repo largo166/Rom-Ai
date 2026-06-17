@@ -1,7 +1,7 @@
 from fastapi import APIRouter, HTTPException
 
 from app.cloud import cloud_enabled, cloud_root_path
-from app.config import settings, write_env_value
+from app.config import BASE_DIR, ENV_FILE, LOG_DIR, settings, write_env_value
 from app.schemas import DeepSeekSettingsUpdate, HealthOut, SettingsStatusOut
 from app.services import list_deepseek_models
 
@@ -29,6 +29,9 @@ def settings_status():
         "cloud_upload_root": str(cloud_root_path()) if settings.cloud_upload_root else "",
         "mock_mode": settings.mock_mode,
         "database_url": settings.database_url,
+        "data_dir": str(BASE_DIR),
+        "env_file": str(ENV_FILE),
+        "log_dir": str(LOG_DIR),
     }
 
 

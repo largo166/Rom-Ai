@@ -212,6 +212,9 @@ class ProjectTaskOut(BaseModel):
     assignee_type: str = ""
     assignee_id: str = ""
     assignee_name: str = ""
+    source_type: str = ""
+    source_id: str = ""
+    due_date: Optional[datetime] = None
     created_at: datetime
     updated_at: datetime
 
@@ -232,6 +235,9 @@ class ProjectTaskCreate(BaseModel):
     risk_level: str = "low"
     status: str = "todo"
     output_requirement: str = ""
+    source_type: str = ""
+    source_id: str = ""
+    due_date: Optional[datetime] = None
 
 
 class ProjectTaskUpdate(BaseModel):
@@ -244,6 +250,7 @@ class ProjectTaskUpdate(BaseModel):
     risk_level: Optional[str] = None
     status: Optional[str] = None
     output_requirement: Optional[str] = None
+    due_date: Optional[datetime] = None
 
 
 class ProjectTimelineOut(BaseModel):
@@ -346,6 +353,15 @@ class ProjectMeetingOut(BaseModel):
     meeting_type: str
     agenda: str
     meeting_link: str
+    tencent_join_url: str = ""
+    tencent_meeting_code: str = ""
+    tencent_meeting_id: str = ""
+    recording_view_url: str = ""
+    record_file_id: str = ""
+    sync_status: str = "not_synced"
+    sync_error: str = ""
+    sync_trace_json: str = "{}"
+    last_synced_at: Optional[datetime] = None
     transcript: str
     summary: str
     mindmap_json: str
@@ -356,31 +372,9 @@ class ProjectMeetingOut(BaseModel):
     updated_at: datetime
 
 
-class SkillCardCreate(BaseModel):
-    card_type: str = "task_breakdown"
-    title: str = ""
-    input_json: dict = {}
-
-
 class SkillCardRunRequest(BaseModel):
     card_type: str = "task_breakdown"
     prompt: str = ""
-
-
-class SkillCardOut(BaseModel):
-    model_config = ConfigDict(from_attributes=True)
-
-    id: str
-    project_id: str
-    card_type: str
-    title: str
-    status: str
-    input_json: str
-    output_json: str
-    markdown: str
-    source: str
-    created_at: datetime
-    updated_at: datetime
 
 
 class TeamMemberCreate(BaseModel):
@@ -433,6 +427,26 @@ class ProjectAssignmentOut(BaseModel):
     created_at: datetime
 
 
+class SkillCardOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: str
+    project_id: str
+    card_type: str
+    title: str
+    input_data: Optional[str] = "{}"
+    output_data: Optional[str] = ""
+    input_json: str = "{}"
+    output_json: str = "{}"
+    markdown: str = ""
+    source: str = ""
+    status: str
+    created_by: str
+    created_at: Optional[datetime] = None
+    completed_at: Optional[datetime] = None
+    updated_at: Optional[datetime] = None
+
+
 class ProjectDetail(ProjectOut):
     files: list[ProjectFileOut] = []
     reports: list[ProjectReportOut] = []
@@ -463,6 +477,9 @@ class SettingsStatusOut(BaseModel):
     cloud_upload_root: str = ""
     mock_mode: bool
     database_url: str
+    data_dir: str = ""
+    env_file: str = ""
+    log_dir: str = ""
 
 
 class DeepSeekSettingsUpdate(BaseModel):
@@ -535,117 +552,12 @@ class DigitalEmployeeOut(BaseModel):
     workload: int
 
 
-# ──────────────────────────────────────────────
-#  新增 schemas：会议 / 任务 / 技能卡片 / 团队分工 / 知识条目
-# ──────────────────────────────────────────────
-
-
-class MeetingCreate(BaseModel):
-    title: str = Field(min_length=1, max_length=200)
-    date: Optional[datetime] = None
-    agenda: str = ""
-    status: str = "scheduled"
-
-
-class MeetingUpdate(BaseModel):
-    title: Optional[str] = None
-    date: Optional[datetime] = None
-    agenda: Optional[str] = None
-    minutes: Optional[str] = None
-    todos: Optional[str] = None
-    recording_url: Optional[str] = None
-    transcript: Optional[str] = None
-    summary: Optional[str] = None
-    mindmap_json: Optional[str] = None
-    next_actions_json: Optional[str] = None
-    status: Optional[str] = None
-
-
-class MeetingOut(BaseModel):
-    model_config = ConfigDict(from_attributes=True)
-
-    id: str
-    project_id: str
-    title: str
-    date: Optional[datetime] = None
-    agenda: str
-    minutes: str
-    todos: str
-    recording_url: str
-    transcript: str = ""
-    summary: str = ""
-    mindmap_json: str = "{}"
-    next_actions_json: str = "[]"
-    status: str
-    created_at: datetime
-
-
-class TaskCreate(BaseModel):
-    title: str = Field(min_length=1, max_length=200)
-    description: str = ""
-    assignee_id: str = ""
-    assignee_type: str = "human"
-    priority: str = "medium"
-    due_date: Optional[datetime] = None
-    source: str = "manual"
-    source_id: str = ""
-
-
-class TaskUpdate(BaseModel):
-    title: Optional[str] = None
-    description: Optional[str] = None
-    assignee_id: Optional[str] = None
-    assignee_type: Optional[str] = None
-    status: Optional[str] = None
-    priority: Optional[str] = None
-    due_date: Optional[datetime] = None
-    source: Optional[str] = None
-    source_id: Optional[str] = None
-
-
-class TaskOut(BaseModel):
-    model_config = ConfigDict(from_attributes=True)
-
-    id: str
-    project_id: str
-    title: str
-    description: str
-    assignee_id: str
-    assignee_type: str
-    status: str
-    priority: str
-    due_date: Optional[datetime] = None
-    source: str
-    source_id: str
-    created_at: datetime
-
-
 class SkillCardCreate(BaseModel):
     card_type: str = Field(default="task_breakdown", min_length=1, max_length=50)
     title: str = ""
     input_json: dict = {}
     input_data: str = "{}"
     created_by: str = "user"
-
-
-class SkillCardOut(BaseModel):
-    model_config = ConfigDict(from_attributes=True)
-
-    id: str
-    project_id: str
-    card_type: str
-    title: str
-    input_data: Optional[str] = "{}"
-    output_data: Optional[str] = ""
-    input_json: str = "{}"
-    output_json: str = "{}"
-    markdown: str = ""
-    source: str = ""
-    status: str
-    created_by: str
-    created_at: Optional[datetime] = None
-    completed_at: Optional[datetime] = None
-    updated_at: Optional[datetime] = None
 
 
 class TeamAssignmentCreate(BaseModel):

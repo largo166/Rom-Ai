@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Bot, Briefcase, Edit3, Loader2, ListTodo, Save, Tag, UserPlus, Users, X } from 'lucide-react';
 import {
   getNetworkMemberWorkload,
@@ -27,7 +27,7 @@ export function NetworkPage() {
   const [editName, setEditName] = useState('');
   const [editRole, setEditRole] = useState('');
 
-  async function loadMembers(nextSelectedKey = selectedKey) {
+  const loadMembers = useCallback(async (nextSelectedKey = '') => {
     setLoading(true);
     try {
       const result = await listTeamMembers();
@@ -40,11 +40,11 @@ export function NetworkPage() {
     } finally {
       setLoading(false);
     }
-  }
+  }, []);
 
   useEffect(() => {
     loadMembers('');
-  }, []);
+  }, [loadMembers]);
 
   const selected = useMemo(
     () => members.find((member) => `${member.type}:${member.id}` === selectedKey),
@@ -64,7 +64,7 @@ export function NetworkPage() {
     setEditing(false);
     setEditName(selected.name);
     setEditRole(selected.role);
-  }, [selected?.id, selected?.type]);
+  }, [selected]);
 
   async function handleSaveMember() {
     if (!selected || selected.type !== 'human' || !editName.trim()) return;

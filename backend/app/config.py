@@ -6,6 +6,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 BASE_DIR = Path(os.environ.get("ROM_AI_BASE_DIR") or Path(__file__).resolve().parents[1]).resolve()
 ENV_FILE = Path(os.environ.get("ROM_AI_ENV_FILE") or BASE_DIR / ".env").resolve()
+LOG_DIR = Path(os.environ.get("ROM_AI_LOG_DIR") or BASE_DIR / "logs").resolve()
 
 
 class Settings(BaseSettings):
@@ -13,7 +14,7 @@ class Settings(BaseSettings):
     deepseek_base_url: str = "https://api.deepseek.com"
     deepseek_model: str = "deepseek-chat"
     tencent_meeting_token: str = ""
-    default_vault_path: str = r"C:\Users\yz_ya\Documents\Obsidian Vault\Obj-哈尔滨"
+    default_vault_path: str = ""
     upload_root: str = str(BASE_DIR / "uploads")
     cloud_upload_enabled: bool = False
     cloud_upload_root: str = str(BASE_DIR / "cloud")
@@ -41,7 +42,8 @@ settings = Settings()
 
 
 def write_env_value(key: str, value: str) -> None:
-    env_path = BASE_DIR / ".env"
+    env_path = ENV_FILE
+    env_path.parent.mkdir(parents=True, exist_ok=True)
     lines = []
     if env_path.exists():
         lines = env_path.read_text(encoding="utf-8-sig").splitlines()

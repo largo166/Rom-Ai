@@ -10,7 +10,7 @@ class RouteRegistrationTest(unittest.TestCase):
     def test_method_and_path_pairs_are_unique(self):
         routes = defaultdict(list)
         for route in app.routes:
-            for method in route.methods or []:
+            for method in getattr(route, "methods", None) or []:
                 if method not in {"HEAD", "OPTIONS"}:
                     routes[(method, route.path)].append(route.endpoint.__name__)
 

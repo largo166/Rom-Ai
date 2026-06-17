@@ -228,7 +228,55 @@ def parse_tencent_record_address_result(text: str) -> dict[str, str]:
 
 
 def extract_tencent_meeting_metadata(meeting: models.Meeting) -> dict[str, str]:
-    return parse_tencent_meeting_result("\n".join([meeting.recording_url or "", meeting.agenda or ""]))
+    legacy = parse_tencent_meeting_result("\n".join([meeting.recording_url or "", meeting.agenda or ""]))
+    return {
+        **legacy,
+        "meeting_code": meeting.tencent_meeting_code or legacy["meeting_code"],
+        "meeting_id": meeting.tencent_meeting_id or legacy["meeting_id"],
+        "join_url": meeting.tencent_join_url or legacy["join_url"],
+    }
+
+
+def extract_tencent_transcript_paragraph_ids(text: str) -> list[str]:
+    payload = _load_tencent_json_payload(text)
+    found: list[str] = []
+
+    def visit(value: Any) -> None:
+        if isinstance(value, dict):
+            pid = value.get("pid") or value.get("paragraph_id")
+            if pid is not None and str(pid) not in found:
+                found.append(str(pid))
+            for child in value.values():
+                visit(child)
+        elif isinstance(value, list):
+            for child in value:
+                visit(child)
+
+    visit(payload)
+    return found
+
+
+def fetch_complete_tencent_transcript(record_file_id: str) -> str:
+    try:
+        paragraph_text = call_tencent_meeting_tool("get_transcripts_paragraphs", {"record_file_id": record_file_id})
+        paragraph_ids = extract_tencent_transcript_paragraph_ids(paragraph_text)
+    except Exception:
+        paragraph_ids = []
+    if not paragraph_ids:
+        paragraph_ids = ["0"]
+    lines: list[str] = []
+    seen: set[str] = set()
+    for pid in paragraph_ids:
+        detail = call_tencent_meeting_tool(
+            "get_transcripts_details",
+            {"record_file_id": record_file_id, "pid": pid, "limit": "50"},
+        )
+        for line in extract_tencent_transcript_text(detail).splitlines():
+            normalized = line.strip()
+            if normalized and normalized not in seen:
+                seen.add(normalized)
+                lines.append(normalized)
+    return "\n".join(lines)
 
 
 def call_tencent_meeting_tool(name: str, arguments: dict[str, Any], timeout: int = 60) -> str:
@@ -291,6 +339,9 @@ def build_tencent_records_query(meeting: models.Meeting) -> dict[str, Any]:
 
 
 def sync_tencent_meeting_minutes(db: Session, meeting: models.Meeting) -> models.Meeting:
+    meeting.sync_status = "syncing"
+    meeting.sync_error = ""
+    db.commit()
     records_args = build_tencent_records_query(meeting)
     records_text = call_tencent_meeting_tool("get_records_list", records_args)
     record = parse_tencent_record_result(records_text)
@@ -305,8 +356,7 @@ def sync_tencent_meeting_minutes(db: Session, meeting: models.Meeting) -> models
         if not record_file_id:
             continue
         try:
-            transcript = call_tencent_meeting_tool("get_transcripts_details", {"record_file_id": record_file_id, "pid": "0", "limit": "50"})
-            transcript = extract_tencent_transcript_text(transcript)
+            transcript = fetch_complete_tencent_transcript(record_file_id)
         except Exception:
             transcript = ""
         if transcript:
@@ -333,17 +383,29 @@ def sync_tencent_meeting_minutes(db: Session, meeting: models.Meeting) -> models
         address = parse_tencent_record_address_result(address_text)
         if address["view_address"]:
             link_parts.append(f"录屏查看：{address['view_address']}")
+            meeting.recording_view_url = address["view_address"]
         if address["trace"]:
             link_parts.append(f"录屏 X-Tc-Trace：{address['trace']}")
         if address["rpc_uuid"]:
             link_parts.append(f"录屏 rpcUuid：{address['rpc_uuid']}")
+        meeting.sync_trace_json = json.dumps(
+            {"X-Tc-Trace": address["trace"], "rpcUuid": address["rpc_uuid"]},
+            ensure_ascii=False,
+        )
     record_file_id = selected_record.get("record_file_id", "")
     if record_file_id:
         link_parts.append(f"record_file_id：{record_file_id}")
+        meeting.record_file_id = record_file_id
     if record.get("download_url"):
         link_parts.append(f"录制下载：{record['download_url']}")
     meeting.recording_url = "\n".join(part for part in link_parts if part).strip()
     meeting.status = "transcribed"
+    meeting.sync_status = "synced"
+    meeting.sync_error = ""
+    meeting.last_synced_at = datetime.now()
+    project = db.get(models.Project, meeting.project_id)
+    if project:
+        deposit_meeting_transcript_to_knowledge(db, project, meeting)
     db.commit()
     db.refresh(meeting)
     return meeting
@@ -2459,6 +2521,13 @@ def deposit_startup_analysis_to_knowledge(
     return record
 
 
+def meeting_summary_without_transcript_excerpt(summary: str) -> str:
+    marker = "\n## 原始转写摘录\n"
+    if marker not in summary:
+        return summary
+    return summary.split(marker, 1)[0].rstrip()
+
+
 def meeting_summary_deposit_markdown(project: models.Project, meeting: models.Meeting) -> str:
     lines = [
         "---",
@@ -2473,14 +2542,19 @@ def meeting_summary_deposit_markdown(project: models.Project, meeting: models.Me
         f"# {project.name} - {meeting.title} AI会议纪要",
         "",
         "## AI纪要",
-        meeting.summary or "暂无AI纪要。",
+        meeting_summary_without_transcript_excerpt(meeting.summary or "暂无AI纪要。"),
     ]
     actions = meeting.next_actions_json or ""
     if actions:
         lines.extend(["", "## 待办", actions])
-    transcript = (meeting.transcript or "").strip()
-    if transcript:
-        lines.extend(["", "## 腾讯原始转写", transcript])
+    if (meeting.transcript or "").strip():
+        lines.extend(
+            [
+                "",
+                "## 原始转写",
+                f"完整转写已独立保存：project-deposits/{project.id}/meeting-transcripts/{meeting.id}.md",
+            ]
+        )
     return "\n".join(lines).strip() + "\n"
 
 
@@ -2494,6 +2568,36 @@ def deposit_meeting_summary_to_knowledge(
     tags = ["项目沉淀", "会议纪要", "AI纪要", project.name, meeting.title, project.city, project.project_type, project.phase]
     markdown = meeting_summary_deposit_markdown(project, meeting)
     record = upsert_knowledge_markdown(db, indexed_path, title, markdown, [tag for tag in tags if tag])
+    db.flush()
+    return record
+
+
+def deposit_meeting_transcript_to_knowledge(
+    db: Session,
+    project: models.Project,
+    meeting: models.Meeting,
+) -> Optional[models.KnowledgeFile]:
+    transcript = (meeting.transcript or "").strip()
+    if not transcript:
+        return None
+    title = f"{project.name} {meeting.title} 原始转写"
+    indexed_path = f"project-deposits/{project.id}/meeting-transcripts/{meeting.id}.md"
+    markdown = "\n".join(
+        [
+            "---",
+            "type: meeting_transcript",
+            f"project_id: {project.id}",
+            f"meeting_id: {meeting.id}",
+            f"meeting_title: {meeting.title}",
+            "---",
+            "",
+            f"# {title}",
+            "",
+            transcript,
+        ]
+    ).strip() + "\n"
+    tags = ["项目沉淀", "会议原始转写", project.name, meeting.title]
+    record = upsert_knowledge_markdown(db, indexed_path, title, markdown, tags)
     db.flush()
     return record
 
@@ -2651,10 +2755,9 @@ async def run_startup_analysis(db: Session, project: models.Project) -> dict[str
                 payload = normalize_startup_analysis_payload(deepseek_payload, fallback_payload)
                 payload["mode"] = "deepseek"
             else:
-                payload["mode"] = "deepseek_error"
+                raise RuntimeError("DeepSeek 未返回有效结构化分析")
         except Exception as exc:
-            payload["mode"] = "deepseek_error"
-            payload["error_message"] = f"DeepSeek 调用失败，已回退本地分析：{exc}"
+            raise RuntimeError(f"DeepSeek 真实分析失败：{exc}") from exc
     report = save_startup_analysis(db, project, payload, analyzed_files=analysis_files)
     return {"report": report, **payload}
 
@@ -2961,13 +3064,21 @@ async def summarize_meeting(db: Session, meeting: models.Meeting) -> models.Meet
     meeting.next_actions_json = json.dumps(actions, ensure_ascii=False)
     meeting.status = "summarized"
     if project:
+        deposit_meeting_transcript_to_knowledge(db, project, meeting)
         deposit_meeting_summary_to_knowledge(db, project, meeting)
     db.commit()
 
-    existing_names = {task.task_name for task in project.tasks} if project else set()
     if project:
         for item in actions:
-            if item["title"] in existing_names:
+            existing = db.scalar(
+                select(models.ProjectTask).where(
+                    models.ProjectTask.project_id == project.id,
+                    models.ProjectTask.source_type == "meeting",
+                    models.ProjectTask.source_id == meeting.id,
+                    models.ProjectTask.task_name == item["title"],
+                )
+            )
+            if existing:
                 continue
             db.add(
                 models.ProjectTask(
@@ -2981,6 +3092,8 @@ async def summarize_meeting(db: Session, meeting: models.Meeting) -> models.Meet
                     risk_level="中",
                     status="todo",
                     output_requirement="来自会议纪要自动生成，需要项目经理确认。",
+                    source_type="meeting",
+                    source_id=meeting.id,
                 )
             )
         db.commit()

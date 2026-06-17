@@ -33,7 +33,6 @@ class Project(Base):
     agent_runs: Mapped[list["AgentRun"]] = relationship(back_populates="project", cascade="all, delete-orphan")
     agent_triggers: Mapped[list["AgentTrigger"]] = relationship(back_populates="project", cascade="all, delete-orphan")
     meetings: Mapped[list["Meeting"]] = relationship(back_populates="project", cascade="all, delete-orphan")
-    tasks_new: Mapped[list["Task"]] = relationship(back_populates="project", cascade="all, delete-orphan")
     skill_cards: Mapped[list["SkillCard"]] = relationship(back_populates="project", cascade="all, delete-orphan")
     team_assignments: Mapped[list["TeamAssignment"]] = relationship(back_populates="project", cascade="all, delete-orphan")
 
@@ -129,6 +128,9 @@ class ProjectTask(Base):
     assignee_type: Mapped[str] = mapped_column(default="", nullable=True)
     assignee_id: Mapped[str] = mapped_column(default="", nullable=True)
     assignee_name: Mapped[str] = mapped_column(default="", nullable=True)
+    source_type: Mapped[str] = mapped_column(default="", nullable=True)
+    source_id: Mapped[str] = mapped_column(default="", nullable=True)
+    due_date: Mapped[datetime] = mapped_column(DateTime, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), onupdate=func.now())
 
@@ -274,6 +276,15 @@ class Meeting(Base):
     minutes: Mapped[str] = mapped_column(Text, default="")
     todos: Mapped[str] = mapped_column(Text, default="[]")
     recording_url: Mapped[str] = mapped_column(default="", nullable=True)
+    tencent_join_url: Mapped[str] = mapped_column(default="")
+    tencent_meeting_code: Mapped[str] = mapped_column(default="")
+    tencent_meeting_id: Mapped[str] = mapped_column(default="")
+    recording_view_url: Mapped[str] = mapped_column(default="")
+    record_file_id: Mapped[str] = mapped_column(default="")
+    sync_status: Mapped[str] = mapped_column(default="not_synced")
+    sync_error: Mapped[str] = mapped_column(Text, default="")
+    sync_trace_json: Mapped[str] = mapped_column(Text, default="{}")
+    last_synced_at: Mapped[datetime] = mapped_column(DateTime, nullable=True)
     transcript: Mapped[str] = mapped_column(Text, default="")
     summary: Mapped[str] = mapped_column(Text, default="")
     mindmap_json: Mapped[str] = mapped_column(Text, default="{}")
@@ -298,25 +309,6 @@ class Meeting(Base):
     @property
     def updated_at(self) -> datetime:
         return self.created_at
-
-
-class Task(Base):
-    __tablename__ = "tasks"
-
-    id: Mapped[str] = mapped_column(primary_key=True, default=new_id)
-    project_id: Mapped[str] = mapped_column(ForeignKey("projects.id"), index=True)
-    title: Mapped[str] = mapped_column(default="")
-    description: Mapped[str] = mapped_column(Text, default="", nullable=True)
-    assignee_id: Mapped[str] = mapped_column(default="", nullable=True)
-    assignee_type: Mapped[str] = mapped_column(default="human")
-    status: Mapped[str] = mapped_column(default="todo")
-    priority: Mapped[str] = mapped_column(default="medium")
-    due_date: Mapped[datetime] = mapped_column(DateTime, nullable=True)
-    source: Mapped[str] = mapped_column(default="manual")
-    source_id: Mapped[str] = mapped_column(default="", nullable=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
-
-    project: Mapped[Project] = relationship(back_populates="tasks_new")
 
 
 class SkillCard(Base):

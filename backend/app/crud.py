@@ -24,7 +24,6 @@ def get_project(db: Session, project_id: str) -> Optional[models.Project]:
             selectinload(models.Project.agent_runs),
             selectinload(models.Project.agent_triggers),
             selectinload(models.Project.meetings),
-            selectinload(models.Project.tasks_new),
             selectinload(models.Project.skill_cards),
             selectinload(models.Project.team_assignments),
         )

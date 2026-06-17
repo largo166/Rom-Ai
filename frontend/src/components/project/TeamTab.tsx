@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Bot, ChevronRight, Loader2, Plus, UserCircle, Users, X } from 'lucide-react';
 import { type NetworkMember, type ProjectDetail, type ProjectTask, listTeamMembers } from '../../lib/projectsApi';
 import {
@@ -33,18 +33,18 @@ export function TeamTab({ projectId, project, focusMemberId = '', onRefresh, onO
   const [newRole, setNewRole] = useState('');
   const [responsibilities, setResponsibilities] = useState('');
 
-  async function loadTeam() {
+  const loadTeam = useCallback(async () => {
     const [team, network] = await Promise.all([
       fetchProjectTeam(projectId).catch(() => []),
       listTeamMembers().then((result) => result.members).catch(() => []),
     ]);
     setProjectTeam(team);
     setNetworkMembers(network);
-  }
+  }, [projectId]);
 
   useEffect(() => {
     loadTeam();
-  }, [projectId, project.assignments]);
+  }, [loadTeam, project.assignments]);
 
   const selectedNetworkMember = useMemo(
     () => networkMembers.find((member) => `${member.type}:${member.id}` === selectedMemberKey),

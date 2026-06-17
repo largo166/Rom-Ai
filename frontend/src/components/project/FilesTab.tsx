@@ -1,7 +1,14 @@
 import { useState } from 'react';
 import { Link } from 'react-router';
-import { Clipboard, FolderInput, Upload, FileText, Loader2 } from 'lucide-react';
-import { uploadProjectFiles, parseProjectFiles, type ProjectDetail } from '../../lib/projectsApi';
+import { Eye, FolderInput, Upload, FileText, Loader2, RefreshCw, Trash2, X } from 'lucide-react';
+import {
+  deleteProjectFile,
+  parseOneProjectFile,
+  uploadProjectFiles,
+  parseProjectFiles,
+  previewProjectFile,
+  type ProjectDetail,
+} from '../../lib/projectsApi';
 
 type Props = {
   projectId: string;
@@ -12,7 +19,7 @@ type Props = {
 export function FilesTab({ projectId, project, onRefresh }: Props) {
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState('');
-  const [copiedPath, setCopiedPath] = useState('');
+  const [preview, setPreview] = useState<{ filename: string; content: string } | null>(null);
 
   async function onUpload(files: FileList | null) {
     if (!files?.length) return;
@@ -43,10 +50,43 @@ export function FilesTab({ projectId, project, onRefresh }: Props) {
     }
   }
 
-  async function copyPath(path: string) {
-    await navigator.clipboard.writeText(path);
-    setCopiedPath(path);
-    window.setTimeout(() => setCopiedPath(''), 1500);
+  async function onPreview(fileId: string) {
+    setBusy(true);
+    try {
+      const result = await previewProjectFile(projectId, fileId);
+      setPreview({ filename: result.filename, content: result.content || '该文件暂时没有可预览的解析文本。' });
+    } catch (error) {
+      setMessage(`预览失败：${String(error)}`);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function onReparse(fileId: string) {
+    setBusy(true);
+    try {
+      await parseOneProjectFile(projectId, fileId);
+      await onRefresh();
+      setMessage('文件已重新解析，并标记为待分析。');
+    } catch (error) {
+      setMessage(`重新解析失败：${String(error)}`);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function onDelete(fileId: string, filename: string) {
+    if (!window.confirm(`确认删除项目资料“${filename}”？此操作无法撤销。`)) return;
+    setBusy(true);
+    try {
+      await deleteProjectFile(projectId, fileId);
+      await onRefresh();
+      setMessage(`已删除项目资料“${filename}”。`);
+    } catch (error) {
+      setMessage(`删除失败：${String(error)}`);
+    } finally {
+      setBusy(false);
+    }
   }
 
   return (
@@ -87,6 +127,18 @@ export function FilesTab({ projectId, project, onRefresh }: Props) {
         </div>
       )}
 
+      {preview && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-6 backdrop-blur-sm">
+          <div className="flex max-h-[85vh] w-full max-w-4xl flex-col rounded-xl border border-white/10 bg-[#171717]">
+            <div className="flex items-center justify-between border-b border-white/10 p-4">
+              <h3 className="text-sm font-semibold text-white">{preview.filename}</h3>
+              <button onClick={() => setPreview(null)} className="text-zinc-500 hover:text-white"><X size={18} /></button>
+            </div>
+            <pre className="overflow-auto whitespace-pre-wrap p-5 text-sm leading-6 text-zinc-300">{preview.content}</pre>
+          </div>
+        </div>
+      )}
+
       {/* File list */}
       <div className="space-y-3">
         {project.files.map((file) => (
@@ -98,18 +150,16 @@ export function FilesTab({ projectId, project, onRefresh }: Props) {
             <div className="text-xs text-zinc-500">
               {file.filetype} · {(file.filesize / 1024).toFixed(1)}KB · {file.parse_status} · {file.analysis_status === 'analyzed' ? '已分析' : '待分析'}
             </div>
-            <div className="mt-3 rounded-md bg-[#0E0E0E] p-3">
-              <div className="mb-2 flex items-center justify-between gap-2">
-                <span className="text-xs font-medium text-zinc-400">项目资料本地副本路径</span>
-                <button
-                  onClick={() => copyPath(file.filepath)}
-                  className="inline-flex items-center gap-1 rounded-md border border-[#333333] px-2 py-1 text-xs text-zinc-300 hover:border-amber-400/50 hover:text-amber-100"
-                >
-                  <Clipboard size={13} />
-                  {copiedPath === file.filepath ? '已复制' : '复制路径'}
-                </button>
-              </div>
-              <div className="break-all text-xs leading-5 text-zinc-500">{file.filepath}</div>
+            <div className="mt-3 flex flex-wrap gap-2">
+              <button onClick={() => onPreview(file.id)} className="inline-flex items-center gap-1 rounded-md border border-[#333333] px-2 py-1 text-xs text-zinc-300 hover:border-amber-400/50">
+                <Eye size={13} />预览
+              </button>
+              <button onClick={() => onReparse(file.id)} className="inline-flex items-center gap-1 rounded-md border border-[#333333] px-2 py-1 text-xs text-zinc-300 hover:border-blue-400/50">
+                <RefreshCw size={13} />重新解析
+              </button>
+              <button onClick={() => onDelete(file.id, file.filename)} className="inline-flex items-center gap-1 rounded-md border border-red-400/30 px-2 py-1 text-xs text-red-300 hover:bg-red-400/10">
+                <Trash2 size={13} />删除
+              </button>
             </div>
           </div>
         ))}
