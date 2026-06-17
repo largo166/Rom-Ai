@@ -2,7 +2,7 @@
 
 ## 安装与启动
 
-1. 双击 `release\ROM-AI-Setup-1.0.1.exe` 安装。
+1. 双击 `release\ROM-AI-Setup-1.0.2.exe` 安装。
 2. 安装完成后，从桌面快捷方式或开始菜单启动 `ROM-AI`。
 3. 首次启动会自动创建本机用户数据目录，不需要手动启动前端或后端。
 
@@ -70,7 +70,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\build-windows-exe.
 构建输出：
 
 ```text
-release\ROM-AI-Setup-1.0.1.exe
+release\ROM-AI-Setup-1.0.2.exe
 release\win-unpacked\ROM-AI.exe
 ```
 

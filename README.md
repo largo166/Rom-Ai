@@ -1,4 +1,4 @@
-# ROM-AI 本地 Demo 1.0.1
+# ROM-AI 本地 Demo 1.0.2
 
 这是 ROM-AI 设计平台的本地 Demo 版本，用于验证四板块联动和项目经理核心工作流。
 
@@ -61,7 +61,7 @@ Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
 打包结果会输出到：
 
 ```text
-release/ROM-AI-Setup-1.0.1.exe
+release/ROM-AI-Setup-1.0.2.exe
 ```
 
 从 `1.0.1` 开始，桌面应用支持在“系统设置”里检查、下载并重启安装更新。发布新版时需要把 `release/` 中的安装包、`.blockmap` 和 `latest.yml` 一起上传到 GitHub Release。

@@ -471,6 +471,7 @@ class SettingsStatusOut(BaseModel):
     deepseek_configured: bool
     deepseek_base_url: str
     deepseek_model: str
+    tencent_meeting_configured: bool = False
     default_vault_path: str
     upload_root: str
     cloud_upload_enabled: bool = False
@@ -486,6 +487,10 @@ class DeepSeekSettingsUpdate(BaseModel):
     api_key: str = ""
     base_url: str = "https://api.deepseek.com"
     model: str = "deepseek-chat"
+
+
+class TencentMeetingSettingsUpdate(BaseModel):
+    token: str = ""
 
 
 class KnowledgeScanRequest(BaseModel):

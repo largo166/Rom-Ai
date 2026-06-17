@@ -301,6 +301,7 @@ export type SettingsStatus = {
   deepseek_configured: boolean;
   deepseek_base_url: string;
   deepseek_model: string;
+  tencent_meeting_configured: boolean;
   default_vault_path: string;
   upload_root: string;
   mock_mode: boolean;
@@ -316,6 +317,10 @@ export type DeepSeekSettingsPayload = {
   api_key: string;
   base_url: string;
   model: string;
+};
+
+export type TencentMeetingSettingsPayload = {
+  token: string;
 };
 
 export type DeepSeekModelInfo = {
@@ -641,6 +646,13 @@ export function getSettingsStatus() {
 
 export function updateDeepSeekSettings(payload: DeepSeekSettingsPayload) {
   return request<SettingsStatus>('/api/settings/deepseek', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  });
+}
+
+export function updateTencentMeetingSettings(payload: TencentMeetingSettingsPayload) {
+  return request<SettingsStatus>('/api/settings/tencent-meeting', {
     method: 'POST',
     body: JSON.stringify(payload),
   });

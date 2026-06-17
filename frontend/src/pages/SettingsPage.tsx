@@ -1,6 +1,13 @@
 import { useEffect, useState } from 'react';
-import { DownloadCloud, FolderOpen, Loader2, Power, RefreshCw, Save, ShieldCheck } from 'lucide-react';
-import { getSettingsStatus, listDeepSeekModels, updateDeepSeekSettings, type DeepSeekModelInfo, type SettingsStatus } from '../lib/projectsApi';
+import { DownloadCloud, FolderOpen, Loader2, Power, RefreshCw, Save, ShieldCheck, Video } from 'lucide-react';
+import {
+  getSettingsStatus,
+  listDeepSeekModels,
+  updateDeepSeekSettings,
+  updateTencentMeetingSettings,
+  type DeepSeekModelInfo,
+  type SettingsStatus,
+} from '../lib/projectsApi';
 import {
   checkDesktopUpdate,
   downloadDesktopUpdate,
@@ -19,6 +26,8 @@ export function SettingsPage() {
   const [model, setModel] = useState('deepseek-chat');
   const [models, setModels] = useState<DeepSeekModelInfo[]>([]);
   const [saving, setSaving] = useState(false);
+  const [savingTencent, setSavingTencent] = useState(false);
+  const [tencentToken, setTencentToken] = useState('');
   const [loadingModels, setLoadingModels] = useState(false);
   const [versionInfo, setVersionInfo] = useState<{ version: string; isPackaged: boolean } | null>(null);
   const [updateStatus, setUpdateStatus] = useState<UpdateStatusPayload>({ status: 'idle' });
@@ -64,6 +73,25 @@ export function SettingsPage() {
       setMessage(`保存失败：${String(error)}`);
     } finally {
       setSaving(false);
+    }
+  }
+
+  async function saveTencentMeetingSettings() {
+    if (!tencentToken.trim()) {
+      setMessage('请输入腾讯会议 Token。');
+      return;
+    }
+    setSavingTencent(true);
+    setMessage('');
+    try {
+      const updated = await updateTencentMeetingSettings({ token: tencentToken });
+      setStatus(updated);
+      setTencentToken('');
+      setMessage('腾讯会议 Token 已保存。创建腾讯会议和同步会议纪要时会使用该配置。');
+    } catch (error) {
+      setMessage(`保存腾讯会议配置失败：${String(error)}`);
+    } finally {
+      setSavingTencent(false);
     }
   }
 
@@ -223,11 +251,47 @@ export function SettingsPage() {
 
             <div className="rounded-lg border border-[#333333] bg-[#111111] p-5">
               <div className="mb-5 flex items-center gap-2 text-sm font-semibold text-white">
+                <Video size={18} className="text-sky-300" />
+                腾讯会议配置
+              </div>
+              <div className="grid grid-cols-1 gap-4 text-sm">
+                <div className="rounded-lg bg-[#171717] p-4">
+                  Token 状态：{status.tencent_meeting_configured ? '已配置' : '未配置'}
+                </div>
+                <label className="space-y-2">
+                  <span className="text-xs text-zinc-500">TENCENT_MEETING_TOKEN</span>
+                  <input
+                    value={tencentToken}
+                    onChange={(event) => setTencentToken(event.target.value)}
+                    type="password"
+                    placeholder={status.tencent_meeting_configured ? '已配置，输入新 Token 可覆盖' : '输入腾讯会议 Token'}
+                    className="w-full rounded-lg border border-[#333333] bg-[#171717] px-3 py-2 text-white outline-none focus:border-sky-300"
+                  />
+                </label>
+                <div className="flex flex-wrap gap-3">
+                  <button
+                    onClick={saveTencentMeetingSettings}
+                    disabled={savingTencent}
+                    className="inline-flex w-fit items-center gap-2 rounded-lg bg-sky-300 px-4 py-2 text-sm font-semibold text-black hover:bg-sky-200 disabled:opacity-50"
+                  >
+                    {savingTencent ? <Loader2 size={16} className="animate-spin" /> : <Save size={16} />}
+                    保存腾讯会议配置
+                  </button>
+                </div>
+                <div className="rounded-lg border border-white/10 bg-[#171717] p-3 text-xs leading-6 text-zinc-400">
+                  配置后，“项目会议”里的创建腾讯会议、同步腾讯会议纪要会使用这个 Token。Token 只写入本机 AppData 配置文件，不会提交到 GitHub。
+                </div>
+              </div>
+            </div>
+
+            <div className="rounded-lg border border-[#333333] bg-[#111111] p-5">
+              <div className="mb-5 flex items-center gap-2 text-sm font-semibold text-white">
                 <ShieldCheck size={18} className="text-emerald-300" />
                 后端状态
               </div>
               <div className="grid grid-cols-1 gap-4 text-sm md:grid-cols-2">
                 <div className="rounded-lg bg-[#171717] p-4">DeepSeek：{status.deepseek_configured ? '已配置' : '未配置'}</div>
+                <div className="rounded-lg bg-[#171717] p-4">腾讯会议：{status.tencent_meeting_configured ? '已配置' : '未配置'}</div>
                 <div className="rounded-lg bg-[#171717] p-4">Mock 模式：{status.mock_mode ? '开启' : '关闭'}</div>
                 <div className="rounded-lg bg-[#171717] p-4">当前模型：{status.deepseek_model}</div>
                 <div className="rounded-lg bg-[#171717] p-4">Base URL：{status.deepseek_base_url}</div>
