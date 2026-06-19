@@ -24,6 +24,7 @@ declare global {
     romAI?: {
       getRuntime: () => Promise<RomAIRuntime>;
       openPath: (key: string) => Promise<boolean>;
+      pickFolder: () => Promise<{ path: string; cancelled: boolean }>;
       getVersion: () => Promise<{ version: string; isPackaged: boolean; info?: Record<string, unknown> }>;
       checkUpdate: () => Promise<unknown>;
       downloadUpdate: () => Promise<unknown>;
@@ -62,6 +63,11 @@ export async function getDesktopRuntime() {
 export async function openDesktopPath(key: string) {
   if (!window.romAI) return false;
   return window.romAI.openPath(key);
+}
+
+export async function pickDesktopFolder() {
+  if (!window.romAI?.pickFolder) return null;
+  return window.romAI.pickFolder();
 }
 
 export async function getDesktopVersion() {

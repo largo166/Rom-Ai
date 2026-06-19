@@ -13,6 +13,10 @@ class Settings(BaseSettings):
     deepseek_api_key: str = ""
     deepseek_base_url: str = "https://api.deepseek.com"
     deepseek_model: str = "deepseek-chat"
+    image_provider: str = "huashu"
+    image_api_key: str = ""
+    image_base_url: str = "https://api.openai.com/v1"
+    image_model: str = "gpt-image-1"
     tencent_meeting_token: str = ""
     default_vault_path: str = ""
     upload_root: str = str(BASE_DIR / "uploads")
@@ -29,6 +33,10 @@ class Settings(BaseSettings):
     @property
     def mock_mode(self) -> bool:
         return not bool(self.deepseek_api_key.strip())
+
+    @property
+    def image_configured(self) -> bool:
+        return bool(self.image_api_key.strip())
 
     @property
     def upload_root_path(self) -> Path:

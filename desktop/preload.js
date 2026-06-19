@@ -14,6 +14,7 @@ ipcRenderer.on('rom-ai-runtime', (_event, payload) => {
 contextBridge.exposeInMainWorld('romAI', {
   getRuntime: async () => runtime || ipcRenderer.invoke('rom-ai:get-runtime'),
   openPath: async (key) => ipcRenderer.invoke('rom-ai:open-path', key),
+  pickFolder: async () => ipcRenderer.invoke('rom-ai:pick-folder'),
   getVersion: async () => ipcRenderer.invoke('rom-ai:get-version'),
   checkUpdate: async () => ipcRenderer.invoke('rom-ai:check-update'),
   downloadUpdate: async () => ipcRenderer.invoke('rom-ai:download-update'),

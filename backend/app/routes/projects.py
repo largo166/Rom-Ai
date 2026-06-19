@@ -22,6 +22,7 @@ from app.services import (
     parse_document,
     project_upload_dir,
     run_project_execution,
+    run_agent_chat,
     run_skill_card,
     run_startup_analysis,
     save_analysis_result,
@@ -694,6 +695,14 @@ def run_project_skill_card(project_id: str, payload: schemas.SkillCardRunRequest
     if not project:
         raise HTTPException(status_code=404, detail="项目不存在")
     return run_skill_card(db, project, payload.card_type, payload.prompt)
+
+
+@router.post("/{project_id}/agent-chat", response_model=schemas.AgentChatOut)
+async def project_agent_chat(project_id: str, payload: schemas.AgentChatRequest, db: Session = Depends(get_db)):
+    project = crud.get_project(db, project_id)
+    if not project:
+        raise HTTPException(status_code=404, detail="项目不存在")
+    return await run_agent_chat(db, project, payload.message, payload.skill_id)
 
 
 @router.post("/{project_id}/assignments", response_model=schemas.ProjectAssignmentOut)

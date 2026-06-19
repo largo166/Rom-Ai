@@ -1,8 +1,11 @@
 from datetime import datetime
 from pathlib import Path
+import json
 import platform
+import shutil
 import subprocess
 from threading import Thread
+from typing import Optional
 from uuid import uuid4
 
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
@@ -25,6 +28,7 @@ from app.services import (
 
 router = APIRouter(prefix="/api/inbox", tags=["inbox"])
 SCAN_JOBS: dict[str, dict] = {}
+LOCAL_ORGANIZE_JOBS: dict[str, dict] = {}
 
 
 def pick_local_folder() -> str:
@@ -177,7 +181,106 @@ def get_scan_job(job_id: str):
     return job
 
 
-@router.get("/scan/latest", response_model=schemas.InboxScanJobOut | None)
+@router.post("/local-organize/start", response_model=schemas.LocalOrganizeJobOut)
+async def start_local_organize(payload: schemas.LocalOrganizeStartRequest, db: Session = Depends(get_db)):
+    root = Path(payload.path).expanduser()
+    if not root.exists() or not root.is_dir():
+        raise HTTPException(status_code=404, detail=f"目录不存在：{root}")
+    try:
+        scan = run_inbox_scan_with_progress(db, root, payload.source_label, payload.days)
+        advice = await build_inbox_batch_advice_with_ai(db, [item.id for item in scan["items"]])
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=f"生成本地整理方案失败：{exc}") from exc
+    job_id = uuid4().hex
+    now = datetime.utcnow().isoformat()
+    output_root = root.parent / f"{root.name}_RMO整理_{datetime.now().strftime('%Y%m%d-%H%M')}"
+    job = {
+        "job_id": job_id,
+        "status": "planned",
+        "path": str(root),
+        "output_root": str(output_root),
+        "item_ids": [item.id for item in scan["items"]],
+        "advice": advice,
+        "manifest_path": "",
+        "result": None,
+        "error": "",
+        "created_at": now,
+        "updated_at": now,
+    }
+    LOCAL_ORGANIZE_JOBS[job_id] = job
+    return job
+
+
+@router.get("/local-organize/jobs/{job_id}", response_model=schemas.LocalOrganizeJobOut)
+def get_local_organize_job(job_id: str):
+    job = LOCAL_ORGANIZE_JOBS.get(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="本地整理任务不存在")
+    return job
+
+
+@router.post("/local-organize/apply", response_model=schemas.LocalOrganizeJobOut)
+def apply_local_organize(payload: schemas.LocalOrganizeApplyRequest, db: Session = Depends(get_db)):
+    job = LOCAL_ORGANIZE_JOBS.get(payload.job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="本地整理任务不存在")
+    item_ids = payload.selected_item_ids or job.get("item_ids") or []
+    if not item_ids:
+        raise HTTPException(status_code=400, detail="没有可执行的整理文件")
+    output_root = Path(payload.output_root or job["output_root"]).expanduser().resolve()
+    output_root.mkdir(parents=True, exist_ok=True)
+    try:
+        result = apply_inbox_recommendations(db, item_ids, payload.force_duplicate_ids, archive_root=output_root)
+        manifest = {
+            "job_id": payload.job_id,
+            "source_root": job["path"],
+            "output_root": str(output_root),
+            "created_at": datetime.utcnow().isoformat(),
+            "copied_count": len(result["files"]),
+            "skipped_count": result["skipped_count"],
+            "created_project_count": result["created_project_count"],
+            "items": [
+                {
+                    "id": item.id,
+                    "original_filename": item.original_filename,
+                    "source_path": item.source_path,
+                    "archive_path": item.archive_path,
+                    "project_id": item.project_id,
+                    "material_type": item.material_type,
+                    "status": item.status,
+                    "suggest_knowledge": item.suggest_knowledge,
+                }
+                for item in result["items"]
+            ],
+        }
+        manifest_json = output_root / "RMO-AI归档清单.json"
+        manifest_md = output_root / "RMO-AI归档清单.md"
+        manifest_json.write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
+        manifest_md.write_text(
+            "# RMO-AI归档清单\n\n"
+            f"- 来源目录：{job['path']}\n"
+            f"- 输出目录：{output_root}\n"
+            f"- 复制文件：{manifest['copied_count']}\n"
+            f"- 跳过文件：{manifest['skipped_count']}\n"
+            f"- 新建项目：{manifest['created_project_count']}\n\n"
+            "## 文件明细\n"
+            + "\n".join(f"- {item['original_filename']} -> {item['archive_path']}（{item['status']}）" for item in manifest["items"]),
+            encoding="utf-8",
+        )
+        job.update({
+            "status": "applied",
+            "output_root": str(output_root),
+            "manifest_path": str(manifest_md),
+            "result": manifest,
+            "updated_at": datetime.utcnow().isoformat(),
+        })
+    except Exception as exc:
+        job.update({"status": "failed", "error": str(exc), "updated_at": datetime.utcnow().isoformat()})
+        raise HTTPException(status_code=400, detail=f"执行本地整理失败：{exc}") from exc
+    return job
+
+
+@router.get("/scan/latest", response_model=Optional[schemas.InboxScanJobOut])
 def latest_scan_job():
     if not SCAN_JOBS:
         return None

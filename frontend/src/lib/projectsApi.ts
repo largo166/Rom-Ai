@@ -1,4 +1,4 @@
-import { getApiBase } from './runtime';
+import { getApiBase, pickDesktopFolder } from './runtime';
 
 const apiBase = () => getApiBase();
 
@@ -170,6 +170,23 @@ export type SkillCard = {
   source: string;
   created_at: string;
   updated_at: string;
+};
+
+export type AgentChatResult = {
+  intent: string;
+  confidence: number;
+  reason: string;
+  selected_skill: { id: string; name: string; description: string; downstream?: string[] };
+  card: SkillCard;
+  context: Record<string, number>;
+  available_skills: Array<{
+    id: string;
+    name: string;
+    description: string;
+    executor: string;
+    retrieval_required: boolean;
+    downstream: string[];
+  }>;
 };
 
 export type TeamMember = {
@@ -568,7 +585,9 @@ export function getLatestInboxScanJob() {
   return request<InboxScanJob | null>('/api/inbox/scan/latest');
 }
 
-export function pickInboxFolder() {
+export async function pickInboxFolder() {
+  const desktopResult = await pickDesktopFolder();
+  if (desktopResult) return desktopResult;
   return request<{ path: string; cancelled: boolean }>('/api/inbox/pick-folder', {
     method: 'POST',
   });
@@ -803,6 +822,13 @@ export function runSkillCard(projectId: string, cardType: string, prompt = '') {
   return request<SkillCard>(`/api/projects/${projectId}/skill-cards/run`, {
     method: 'POST',
     body: JSON.stringify({ card_type: cardType, prompt }),
+  });
+}
+
+export function runAgentChat(projectId: string, message: string, skillId = '') {
+  return request<AgentChatResult>(`/api/projects/${projectId}/agent-chat`, {
+    method: 'POST',
+    body: JSON.stringify({ message, skill_id: skillId }),
   });
 }
 

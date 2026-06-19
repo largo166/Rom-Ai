@@ -74,13 +74,21 @@ export function OverviewTab({ projectId, project, onRefresh }: Props) {
   const doingTasks = project.tasks.filter((t) => t.status === 'doing' || t.status === 'in_progress' || t.status === '进行中').length;
   const meetingCount = project.meetings.length;
   const aiResultCount = project.skill_cards.length;
+  const riskTasks = project.tasks.filter((t) => (t.risk_level || '').includes('高') || (t.risk_level || '').toLowerCase() === 'high');
+  const recentMeeting = [...project.meetings].sort((a, b) => String(b.created_at).localeCompare(String(a.created_at)))[0];
+  const nextTasks = project.tasks
+    .filter((t) => !['done', 'completed', '已完成'].includes(t.status))
+    .slice(0, 5);
+  const deliverableGap = Math.max(0, 4 - project.files.filter((file) => ['pptx', 'pdf', 'docx', 'xlsx'].includes(file.filetype)).length);
 
   const stats = useMemo(() => [
     { label: '待办任务', value: todoTasks, color: 'text-amber-300' },
     { label: '进行中', value: doingTasks, color: 'text-blue-300' },
     { label: '会议数', value: meetingCount, color: 'text-emerald-300' },
     { label: 'AI成果', value: aiResultCount, color: 'text-violet-300' },
-  ], [aiResultCount, doingTasks, meetingCount, todoTasks]);
+    { label: '高风险', value: riskTasks.length, color: 'text-red-300' },
+    { label: '成果缺口', value: deliverableGap, color: 'text-sky-300' },
+  ], [aiResultCount, deliverableGap, doingTasks, meetingCount, riskTasks.length, todoTasks]);
 
   // 技术重点：优先使用启动分析的技术重点卡，否则使用默认维度
   const techPoints: Array<{ dimension: string; summary: string; risk_level: string; checkpoints?: string[] }> =
@@ -119,13 +127,45 @@ export function OverviewTab({ projectId, project, onRefresh }: Props) {
       )}
 
       {/* 数据看板 */}
-      <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
+      <div className="grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-6">
         {stats.map((item) => (
           <div key={item.label} className="rounded-xl border border-white/10 bg-white/5 p-4 backdrop-blur-sm">
             <div className="mb-2 text-2xl font-semibold text-white">{item.value}</div>
             <div className={`text-xs ${item.color}`}>{item.label}</div>
           </div>
         ))}
+      </div>
+
+      <div className="grid grid-cols-1 gap-4 xl:grid-cols-[1.2fr_1fr]">
+        <div className="rounded-xl border border-white/10 bg-white/5 p-5 backdrop-blur-sm">
+          <h2 className="mb-3 text-sm font-semibold text-white">最近会议结论</h2>
+          {recentMeeting ? (
+            <div className="space-y-3">
+              <div className="text-sm font-medium text-zinc-200">{recentMeeting.title}</div>
+              <p className="max-h-28 overflow-hidden text-xs leading-6 text-zinc-400">
+                {recentMeeting.summary || recentMeeting.agenda || '会议已创建，纪要待生成。'}
+              </p>
+            </div>
+          ) : (
+            <p className="text-xs leading-6 text-zinc-500">暂无会议记录。可在会议页或 AI代理的会议纪要卡创建。</p>
+          )}
+        </div>
+
+        <div className="rounded-xl border border-white/10 bg-white/5 p-5 backdrop-blur-sm">
+          <h2 className="mb-3 text-sm font-semibold text-white">下一步</h2>
+          {nextTasks.length ? (
+            <div className="space-y-2">
+              {nextTasks.map((task) => (
+                <div key={task.id} className="rounded-lg border border-white/10 bg-[#0E0E0E] px-3 py-2">
+                  <div className="text-xs font-medium text-zinc-200">{task.task_name}</div>
+                  <div className="mt-1 text-[11px] text-zinc-500">{task.owner_role || '待分配'} · {task.priority || '普通'}</div>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <p className="text-xs leading-6 text-zinc-500">暂无待办任务。可用 AI代理生成任务拆解。</p>
+          )}
+        </div>
       </div>
 
       {/* 技术重点卡片区 */}

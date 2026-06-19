@@ -1,6 +1,7 @@
 import json
 import os
 import re
+import base64
 import hashlib
 import shutil
 import subprocess
@@ -14,11 +15,12 @@ import httpx
 from docx import Document
 from openpyxl import load_workbook
 from pypdf import PdfReader
-from sqlalchemy import delete, func, or_, select
+from sqlalchemy import delete, func, or_, select, text
 from sqlalchemy.orm import Session
 
 from app import models
 from app.config import settings
+from app.skill_manifest import SKILL_BY_ID, SkillDefinition, list_builtin_skills, match_skill_by_keywords
 
 TENCENT_MEETING_SCRIPT = Path.home() / ".codex" / "skills" / "tencent-meeting-mcp" / "scripts" / "tencent_meeting.py"
 
@@ -2052,6 +2054,35 @@ def list_knowledge_files(db: Session, q: str = "", limit: int = 100) -> dict[str
 
 def search_knowledge(db: Session, question: str, limit: int = 6) -> list[models.KnowledgeChunk]:
     terms = [term for term in re.split(r"\s+", question.strip()) if term]
+    if terms and settings.database_url.startswith("sqlite"):
+        try:
+            db.execute(text("CREATE VIRTUAL TABLE IF NOT EXISTS knowledge_chunks_fts USING fts5(chunk_id UNINDEXED, heading, content, path)"))
+            db.execute(text("DELETE FROM knowledge_chunks_fts"))
+            db.execute(
+                text(
+                    "INSERT INTO knowledge_chunks_fts(chunk_id, heading, content, path) "
+                    "SELECT id, heading, content, path FROM knowledge_chunks"
+                )
+            )
+            fts_query = " OR ".join(term.replace('"', "") for term in terms[:6])
+            rows = list(
+                db.execute(
+                    text(
+                        "SELECT chunk_id FROM knowledge_chunks_fts "
+                        "WHERE knowledge_chunks_fts MATCH :q "
+                        "ORDER BY bm25(knowledge_chunks_fts) LIMIT :limit"
+                    ),
+                    {"q": fts_query, "limit": limit},
+                )
+            )
+            ids = [row[0] for row in rows]
+            if ids:
+                by_id = {chunk.id: chunk for chunk in db.scalars(select(models.KnowledgeChunk).where(models.KnowledgeChunk.id.in_(ids)))}
+                ordered = [by_id[item_id] for item_id in ids if item_id in by_id]
+                if ordered:
+                    return ordered
+        except Exception:
+            db.rollback()
     query = select(models.KnowledgeChunk)
     if terms:
         clauses = []
@@ -2998,16 +3029,37 @@ def default_meeting_agenda(project: models.Project) -> str:
 
 def _format_meeting_summary_markdown(project_name: str, payload: dict[str, Any]) -> str:
     summary = str(payload.get("summary") or "").strip()
+    core_items = [str(item).strip() for item in payload.get("core_items", []) if str(item).strip()]
+    demand_translation = payload.get("demand_translation", []) or []
     decisions = [str(item).strip() for item in payload.get("decisions", []) if str(item).strip()]
     risks = [str(item).strip() for item in payload.get("risks", []) if str(item).strip()]
     next_steps = [str(item).strip() for item in payload.get("next_steps", []) if str(item).strip()]
-    lines = [f"# {project_name} 会议纪要", "", "## 摘要", summary or "未能从真实转写中提取明确摘要。"]
+    broadcast_script = str(payload.get("broadcast_script") or "").strip()
+    lines = [f"# {project_name} 五段式会议纪要", "", "## 1. 纪要内容", summary or "未能从真实转写中提取明确摘要。"]
+    if core_items:
+        lines.extend(["", "## 2. 核心事项", *[f"- {item}" for item in core_items]])
+    if demand_translation:
+        lines.extend(["", "## 3. 甲方诉求转译（内部研判）"])
+        for item in demand_translation:
+            if isinstance(item, dict):
+                raw = str(item.get("raw") or item.get("source") or "原话待确认").strip()
+                time = str(item.get("time") or "时间点待确认").strip()
+                translation = str(item.get("translation") or item.get("meaning") or "转译待复核").strip()
+                action = str(item.get("design_response") or item.get("action") or "").strip()
+                lines.append(f"- 原话：{raw}（{time}）")
+                lines.append(f"  转译：{translation}")
+                if action:
+                    lines.append(f"  设计回应：{action}")
+            else:
+                lines.append(f"- {item}")
     if decisions:
-        lines.extend(["", "## 决策事项", *[f"- {item}" for item in decisions]])
+        lines.extend(["", "## 4. 会议决议", *[f"- {item}" for item in decisions]])
     if risks:
         lines.extend(["", "## 风险与问题", *[f"- {item}" for item in risks]])
     if next_steps:
-        lines.extend(["", "## 下一步", *[f"- {item}" for item in next_steps]])
+        lines.extend(["", "## 5. 待办事项", *[f"- {item}" for item in next_steps]])
+    if broadcast_script:
+        lines.extend(["", "## 语音播报稿", broadcast_script])
     return "\n".join(lines).strip()
 
 
@@ -3031,10 +3083,15 @@ async def summarize_meeting(db: Session, meeting: models.Meeting) -> models.Meet
         raise ValueError("请先同步腾讯会议真实转写，再生成AI纪要")
 
     prompt = (
-        "请只基于以下腾讯会议真实转写生成会议纪要，不要补充转写中没有的信息。\n"
-        "输出 JSON，字段：summary 字符串；decisions 字符串数组；risks 字符串数组；"
-        "next_steps 字符串数组；todos 数组，每项包含 title、owner、status。"
+        "请只基于以下腾讯会议真实转写生成五段式会议纪要，不要补充转写中没有的信息。\n"
+        "输出 JSON，字段：summary 字符串；core_items 字符串数组；"
+        "demand_translation 数组，每项包含 raw、time、translation、design_response，"
+        "仅转译真实出现的甲方模糊诉求，例如“不够高级/没气势/不像某风格”；"
+        "decisions 字符串数组；risks 字符串数组；next_steps 字符串数组；"
+        "todos 数组，每项包含 title、owner、status；broadcast_script 字符串。"
         "如果无法判断负责人，owner 写“待确认”；status 默认 todo。\n\n"
+        "种子词典：不够高级→材料质感/比例/留白/入口仪式感；没气势→体量轮廓/轴线/界面展开；"
+        "不像宋式→屋面/檐口/色彩/尺度语汇；不够松弛→空间节奏/界面密度/景观留白。\n\n"
         f"项目：{project_name}\n"
         f"会议标题：{meeting.title}\n"
         f"真实转写：\n{transcript[:12000]}"
@@ -3101,60 +3158,421 @@ async def summarize_meeting(db: Session, meeting: models.Meeting) -> models.Meet
     return meeting
 
 
-def run_skill_card(db: Session, project: models.Project, card_type: str, prompt: str = "") -> models.SkillCard:
-    card_names = {
-        "task_breakdown": "任务拆解卡",
-        "technical_focus": "技术重点卡",
-        "meeting_minutes": "会议纪要/待办卡",
-        "ppt_outline": "PPT结构卡",
+def _project_context_pack(project: models.Project) -> dict[str, Any]:
+    files = list(project.files[:12])
+    meetings = list(project.meetings[:6])
+    tasks = list(project.tasks[:10])
+    reports = list(project.reports[:4])
+    refs = list(project.knowledge_references[:8])
+    return {
+        "project": {
+            "id": project.id,
+            "name": project.name,
+            "city": project.city,
+            "type": project.project_type,
+            "phase": project.phase,
+            "status": project.status,
+            "description": project.description,
+        },
+        "files": [
+            {
+                "name": file.filename,
+                "type": file.filetype,
+                "parse_status": file.parse_status,
+                "summary": (file.parsed_text or "")[:600],
+            }
+            for file in files
+        ],
+        "meetings": [
+            {
+                "title": meeting.title,
+                "summary": (meeting.summary or "")[:800],
+                "next_actions": meeting.next_actions_json,
+            }
+            for meeting in meetings
+        ],
+        "tasks": [
+            {
+                "name": task.task_name,
+                "status": task.status,
+                "priority": task.priority,
+                "risk": task.risk_level,
+                "owner": task.owner_role,
+            }
+            for task in tasks
+        ],
+        "reports": [
+            {
+                "type": report.report_type,
+                "markdown": (report.markdown or "")[:1200],
+            }
+            for report in reports
+        ],
+        "knowledge_references": [
+            {
+                "source": ref.source_file,
+                "quote": ref.quote,
+                "score": ref.relevance_score,
+            }
+            for ref in refs
+        ],
+        "counts": {
+            "files": len(project.files),
+            "meetings": len(project.meetings),
+            "tasks": len(project.tasks),
+            "knowledge_refs": len(project.knowledge_references),
+            "skill_cards": len(project.skill_cards),
+        },
     }
-    card_type = card_type if card_type in card_names else "task_breakdown"
-    tasks = [task.task_name for task in project.tasks[:8]]
-    refs = [ref.source_file for ref in project.knowledge_references[:6]]
-    meetings = [meeting.title for meeting in project.meetings[:5]]
-    outputs: dict[str, Any] = {
-        "task_breakdown": {
-            "items": tasks
-            or ["资料完整性检查", "技术边界复核", "竞品案例收集", "PPT汇报结构搭建"],
-            "next": "将任务分配给真实成员或AI数字员工。",
-        },
-        "technical_focus": {
-            "cards": ["日照计算方式", "退界要求", "面积计算方式", "消防/报批风险", "规划条件复核"],
-            "knowledge_sources": refs or ["待扫描知识库后自动引用来源"],
-        },
-        "meeting_minutes": {
-            "meetings": meetings or ["项目启动会"],
-            "next_actions": ["补齐资料", "确认关键技术边界", "准备下次业主会"],
-        },
-        "ppt_outline": {
-            "slides": ["封面", "项目背景", "技术边界", "历史案例复用", "任务拆解", "风险与下一步"],
-            "tone": "面向业主沟通，结论清晰、风险前置、任务可执行。",
-        },
-    }
-    markdown = f"# {card_names[card_type]}\n\n"
-    if prompt:
-        markdown += f"## 用户需求\n{prompt}\n\n"
-    if card_type == "task_breakdown":
-        markdown += "## 建议任务\n" + "\n".join(f"- {item}" for item in outputs[card_type]["items"])
-    elif card_type == "technical_focus":
-        markdown += "## 技术复用重点\n" + "\n".join(f"- {item}" for item in outputs[card_type]["cards"])
-        markdown += "\n\n## 来源\n" + "\n".join(f"- {item}" for item in outputs[card_type]["knowledge_sources"])
-    elif card_type == "meeting_minutes":
-        markdown += "## 会议推进\n" + "\n".join(f"- {item}" for item in outputs[card_type]["next_actions"])
-    else:
-        markdown += "## PPT框架\n" + "\n".join(f"{idx + 1}. {item}" for idx, item in enumerate(outputs[card_type]["slides"]))
 
+
+def _skill_source_refs(chunks: list[models.KnowledgeChunk], project: models.Project) -> list[dict[str, str]]:
+    refs = _refs_from_chunks(chunks) if chunks else []
+    if refs:
+        return [
+            {
+                "source_file": str(ref.get("source_file") or ref.get("source_path") or "知识库"),
+                "quote": str(ref.get("quote") or "")[:240],
+            }
+            for ref in refs
+        ]
+    return [
+        {"source_file": ref.source_file, "quote": (ref.quote or "")[:240]}
+        for ref in project.knowledge_references[:6]
+    ]
+
+
+def _fallback_skill_output(skill: SkillDefinition, project: models.Project, prompt: str, sources: list[dict[str, str]]) -> dict[str, Any]:
+    project_name = project.name or "当前项目"
+    common_sources = sources or [{"source_file": "当前项目上下文", "quote": "尚未检索到明确知识库来源。"}]
+    if skill.id == "brief_interpretation":
+        return {
+            "explicit_goals": ["确认项目任务书中的建设目标、阶段成果和汇报对象"],
+            "implicit_goals": ["补齐甲方真实诉求、审查设计矛盾与边界条件"],
+            "design_conflicts": ["资料完整性与方案判断之间仍有缺口"],
+            "entry_points": ["先完成资料归档与任务书解读，再形成汇报主线"],
+            "sources": common_sources,
+        }
+    if skill.id == "task_breakdown":
+        return {
+            "tasks": [
+                {"title": "补齐项目基础资料", "owner": "项目经理", "priority": "高", "deliverable": "资料缺口清单"},
+                {"title": "复核技术边界", "owner": "技术负责人", "priority": "高", "deliverable": "日照/退界/指标风险表"},
+                {"title": "搭建汇报结构", "owner": "方案主创", "priority": "中", "deliverable": "PPT大纲"},
+            ],
+            "next": "可将任务写回任务看板后分派。",
+        }
+    if skill.id == "technical_focus":
+        return {
+            "cards": [
+                {"dimension": "日照", "risk": "中", "checkpoints": ["日照标准", "遮挡关系", "测算口径"]},
+                {"dimension": "退界", "risk": "中", "checkpoints": ["红线", "绿线", "消防登高面"]},
+                {"dimension": "面积", "risk": "中", "checkpoints": ["容积率", "计容口径", "地库边界"]},
+                {"dimension": "消防", "risk": "高", "checkpoints": ["消防车道", "登高场地", "防火分区"]},
+            ],
+            "sources": common_sources,
+        }
+    if skill.id == "meeting_minutes":
+        return {
+            "summary": f"{project_name} 本次会议围绕项目推进、资料补齐和下一步成果进行讨论。",
+            "core_items": ["确认下一阶段汇报目标", "补齐技术边界资料", "形成可执行待办"],
+            "demand_translation": [
+                {
+                    "raw": prompt[:160] or "待补充会议原话",
+                    "time": "待确认",
+                    "translation": "需要转化为材料、比例、界面、体量或汇报逻辑上的明确设计动作。",
+                    "internal_only": True,
+                }
+            ],
+            "decisions": ["先完成资料归档与技术边界复核，再进入汇报结构深化。"],
+            "todos": [{"title": "整理会议待办并分配责任人", "owner": "项目经理", "status": "todo"}],
+            "broadcast_script": "本次会议确认了资料补齐、技术边界复核和下一步汇报准备三项重点，请项目团队优先处理。",
+            "sources": common_sources,
+        }
+    if skill.id == "ppt_outline":
+        return {
+            "title": f"{project_name} 方案汇报框架",
+            "slides": [
+                {"page": 1, "title": "封面", "content": "项目名称、阶段、汇报对象"},
+                {"page": 2, "title": "项目背景", "content": "城市、区位、用地与甲方目标"},
+                {"page": 3, "title": "核心问题", "content": "设计矛盾、技术边界、风险点"},
+                {"page": 4, "title": "设计主线", "content": "概念、空间策略、产品策略"},
+                {"page": 5, "title": "方案展开", "content": "总图、流线、户型/功能、立面方向"},
+                {"page": 6, "title": "下一步", "content": "待补资料、关键节点与责任分工"},
+            ],
+            "key_messages": ["结论前置", "风险透明", "策略可执行"],
+            "missing_assets": ["关键图纸", "技术指标", "参考案例"],
+            "sources": common_sources,
+        }
+    if skill.id == "concept_copy":
+        return {
+            "concept_title": f"{project_name} 的场景更新与秩序重构",
+            "narrative": "从场地真实约束和甲方诉求出发，建立清晰的空间秩序、识别性界面与可落地的产品表达。",
+            "strategies": ["强化入口界面", "控制体量比例", "建立连续公共空间", "让材料与尺度回应项目定位"],
+            "presentation_copy": "本方案以清晰的空间秩序回应场地约束，以克制而有识别度的建筑表达建立项目记忆点。",
+            "sources": common_sources,
+        }
+    if skill.id == "competitor_analysis":
+        return {
+            "comparables": ["历史项目/案例库待检索后自动回填"],
+            "transferable_strategies": ["入口仪式感", "材料层级", "展示界面", "汇报叙事结构"],
+            "limits": ["不同城市、甲方、容积率与报批环境下不可直接套用。"],
+            "risks": ["若缺少真实历史项目索引，竞品分析会退化为方法建议。"],
+            "sources": common_sources,
+        }
+    if skill.id == "reference_image_classification":
+        return {
+            "image_type": "待分类参考图",
+            "style_tags": ["现代", "克制", "展示面"],
+            "material_tags": ["石材", "金属", "玻璃"],
+            "reuse_points": ["入口界面", "立面比例", "材料层级"],
+            "next_prompt": "可继续生成基于当前项目的生图提示词。",
+        }
+    if skill.id == "image_prompt":
+        return {
+            "positive_prompt": f"{project_name}，建筑方案前期意向图，结合城市语境、项目阶段与甲方诉求，现代克制，高品质材料，清晰体量比例，真实建筑摄影感",
+            "negative_prompt": "低清晰度，过度奇幻，结构不合理，文字水印，畸形透视",
+            "style_tags": ["建筑摄影", "方案意向", "高品质", "克制"],
+            "camera": "eye-level architectural photography, 35mm lens",
+            "usage": "用于方案前期风格探索与汇报意向沟通",
+            "sources": common_sources,
+        }
+    if skill.id == "scheme_review":
+        return {
+            "strengths": ["项目已有资料可支撑基础判断"],
+            "risks": ["技术边界、甲方诉求和成果缺口仍需复核"],
+            "missing_info": ["完整任务书", "最新会议结论", "指标表", "关键图纸"],
+            "next_actions": ["先补齐资料，再做方案评审定稿"],
+            "sources": common_sources,
+        }
+    return {"result": "已生成基础成果。", "sources": common_sources}
+
+
+def _markdown_from_output(skill: SkillDefinition, output: dict[str, Any], prompt: str) -> str:
+    lines = [f"# {skill.name}", ""]
+    if prompt:
+        lines.extend(["## 用户需求", prompt, ""])
+    for key, value in output.items():
+        title = {
+            "summary": "纪要内容",
+            "core_items": "核心事项",
+            "demand_translation": "甲方诉求转译",
+            "decisions": "会议决议",
+            "todos": "待办事项",
+            "broadcast_script": "播报稿",
+            "slides": "PPT框架",
+            "tasks": "任务清单",
+            "sources": "来源",
+        }.get(key, key)
+        lines.append(f"## {title}")
+        if isinstance(value, list):
+            for item in value:
+                if isinstance(item, dict):
+                    lines.append("- " + "；".join(f"{k}: {v}" for k, v in item.items() if k != "sources"))
+                else:
+                    lines.append(f"- {item}")
+        elif isinstance(value, dict):
+            for item_key, item_value in value.items():
+                lines.append(f"- {item_key}: {item_value}")
+        else:
+            lines.append(str(value))
+        lines.append("")
+    return "\n".join(lines).strip()
+
+
+def _normalize_skill_id(card_type: str) -> str:
+    aliases = {
+        "ppt_structure": "ppt_outline",
+        "tech_points": "technical_focus",
+        "image_generation": "ai_image_generation",
+        "ai_image": "ai_image_generation",
+    }
+    return aliases.get(card_type, card_type)
+
+
+async def _deepseek_skill_output(skill: SkillDefinition, project: models.Project, prompt: str, context: dict[str, Any], sources: list[dict[str, str]]) -> dict[str, Any]:
+    if settings.mock_mode:
+        return _fallback_skill_output(skill, project, prompt, sources)
+    schema_hint = "、".join(skill.output_schema)
+    instruction = (
+        "你是建筑方案前期的项目 AI 执行器。必须围绕当前项目回答，避免通用空话。\n"
+        "判断、研判、转译、方案、风险和复用类内容要优先基于项目上下文与知识库来源；不要编造来源。\n"
+        "请输出 JSON，不要输出 Markdown。字段尽量贴合以下 schema："
+        f"{schema_hint}。\n"
+    )
+    payload = {
+        "skill": {"id": skill.id, "name": skill.name, "description": skill.description},
+        "user_request": prompt,
+        "project_context": context,
+        "retrieved_sources": sources,
+    }
+    try:
+        raw = await call_deepseek_text(
+            prompt=json.dumps(payload, ensure_ascii=False, default=str),
+            system_prompt=instruction,
+        )
+        match = re.search(r"\{.*\}", raw, re.S)
+        if match:
+            parsed = json.loads(match.group(0))
+            if isinstance(parsed, dict):
+                if sources and "sources" not in parsed:
+                    parsed["sources"] = sources
+                return parsed
+    except Exception:
+        pass
+    return _fallback_skill_output(skill, project, prompt, sources)
+
+
+async def _generate_image_asset(project: models.Project, prompt: str, output: dict[str, Any]) -> dict[str, Any]:
+    image_prompt = (
+        output.get("positive_prompt")
+        or output.get("prompt")
+        or prompt
+        or f"{project.name} 建筑方案前期意向图"
+    )
+    result: dict[str, Any] = {
+        "provider": settings.image_provider,
+        "model": settings.image_model,
+        "prompt": image_prompt,
+        "image_paths": [],
+        "status": "not_configured",
+        "message": "图片生成服务未配置。",
+    }
+    if not settings.image_configured:
+        return result
+
+    target_dir = project_upload_dir(project.id) / "generated-images"
+    target_dir.mkdir(parents=True, exist_ok=True)
+    headers = {"Authorization": f"Bearer {settings.image_api_key}"}
+    body = {
+        "model": settings.image_model,
+        "prompt": image_prompt,
+        "n": 1,
+        "size": "1024x1024",
+    }
+    try:
+        async with httpx.AsyncClient(timeout=120) as client:
+            response = await client.post(f"{settings.image_base_url.rstrip('/')}/images/generations", headers=headers, json=body)
+            response.raise_for_status()
+            data = response.json()
+            first = (data.get("data") or [{}])[0]
+            image_bytes = b""
+            if first.get("b64_json"):
+                image_bytes = base64.b64decode(first["b64_json"])
+            elif first.get("url"):
+                image_response = await client.get(first["url"])
+                image_response.raise_for_status()
+                image_bytes = image_response.content
+            if not image_bytes:
+                raise RuntimeError("图片服务未返回可保存的图片数据")
+            file_path = target_dir / f"ai-image-{datetime.now().strftime('%Y%m%d-%H%M%S')}-{uuid4().hex[:6]}.png"
+            file_path.write_bytes(image_bytes)
+            result.update({"image_paths": [str(file_path)], "status": "succeeded", "message": "图片已生成并保存到项目成果目录。"})
+    except Exception as exc:
+        result.update({"status": "failed", "message": f"图片生成失败：{exc}"})
+    return result
+
+
+async def _execute_skill(db: Session, project: models.Project, skill: SkillDefinition, prompt: str, intent_meta: Optional[dict[str, Any]] = None) -> models.SkillCard:
+    context = _project_context_pack(project)
+    query = " ".join([prompt, project.name, project.city, project.project_type, project.phase]).strip()
+    chunks = search_knowledge(db, query, limit=8) if (skill.retrieval_required and query) else []
+    sources = _skill_source_refs(chunks, project)
+    output = await _deepseek_skill_output(skill, project, prompt, context, sources)
+
+    if skill.id == "ai_image_generation":
+        prompt_skill = SKILL_BY_ID.get("image_prompt")
+        prompt_output = await _deepseek_skill_output(prompt_skill or skill, project, prompt, context, sources)
+        image_result = await _generate_image_asset(project, prompt, prompt_output)
+        output = {**prompt_output, **image_result, "source_context": sources}
+
+    markdown = _markdown_from_output(skill, output, prompt)
+    input_payload = {
+        "prompt": prompt,
+        "project_id": project.id,
+        "skill": skill.id,
+        "intent": intent_meta or {},
+        "context_counts": context.get("counts", {}),
+    }
     card = models.SkillCard(
         project_id=project.id,
-        card_type=card_type,
-        title=card_names[card_type],
-        status="succeeded",
-        input_json=json.dumps({"prompt": prompt, "project_id": project.id}, ensure_ascii=False),
-        output_json=json.dumps(outputs[card_type], ensure_ascii=False),
+        card_type=skill.id,
+        title=skill.name,
+        status="succeeded" if output.get("status") not in {"failed", "not_configured"} else output.get("status", "succeeded"),
+        input_json=json.dumps(input_payload, ensure_ascii=False, default=str),
+        output_json=json.dumps(output, ensure_ascii=False, default=str),
         markdown=markdown,
-        source="mock" if settings.mock_mode else "deepseek",
+        source="huashu" if skill.id == "ai_image_generation" else ("mock" if settings.mock_mode else "deepseek"),
+        completed_at=datetime.utcnow(),
     )
     db.add(card)
     db.commit()
     db.refresh(card)
     return card
+
+
+def run_skill_card(db: Session, project: models.Project, card_type: str, prompt: str = "") -> models.SkillCard:
+    skill_id = _normalize_skill_id(card_type)
+    skill = SKILL_BY_ID.get(skill_id, SKILL_BY_ID["task_breakdown"])
+    sources = _skill_source_refs([], project)
+    output = _fallback_skill_output(skill, project, prompt, sources)
+    markdown = _markdown_from_output(skill, output, prompt)
+    card = models.SkillCard(
+        project_id=project.id,
+        card_type=skill.id,
+        title=skill.name,
+        status="succeeded",
+        input_json=json.dumps({"prompt": prompt, "project_id": project.id, "skill": skill.id}, ensure_ascii=False),
+        output_json=json.dumps(output, ensure_ascii=False, default=str),
+        markdown=markdown,
+        source="local_skill",
+        completed_at=datetime.utcnow(),
+    )
+    db.add(card)
+    db.commit()
+    db.refresh(card)
+    return card
+
+
+async def run_agent_chat(db: Session, project: models.Project, message: str, requested_skill: str = "") -> dict[str, Any]:
+    if requested_skill:
+        skill = SKILL_BY_ID.get(_normalize_skill_id(requested_skill), SKILL_BY_ID["task_breakdown"])
+        confidence = 1.0
+        reason = "用户直接指定技能。"
+    else:
+        skill, confidence, reason = match_skill_by_keywords(message)
+        if confidence < 0.5 and not settings.mock_mode:
+            try:
+                choices = list_builtin_skills()
+                raw = await call_deepseek_text(
+                    prompt=json.dumps({"message": message, "skills": choices}, ensure_ascii=False),
+                    system_prompt=(
+                        "请为建筑设计 AI 代理选择最合适的 skill。只输出 JSON："
+                        '{"intent":"skill_id","confidence":0.0到1.0,"reason":"原因"}。'
+                    ),
+                )
+                match = re.search(r"\{.*\}", raw, re.S)
+                if match:
+                    payload = json.loads(match.group(0))
+                    candidate = SKILL_BY_ID.get(_normalize_skill_id(str(payload.get("intent") or "")))
+                    if candidate:
+                        skill = candidate
+                        confidence = float(payload.get("confidence") or confidence)
+                        reason = str(payload.get("reason") or reason)
+            except Exception:
+                pass
+    card = await _execute_skill(db, project, skill, message, {"confidence": confidence, "reason": reason})
+    return {
+        "intent": skill.id,
+        "confidence": confidence,
+        "reason": reason,
+        "selected_skill": {
+            "id": skill.id,
+            "name": skill.name,
+            "description": skill.description,
+            "downstream": list(skill.downstream),
+        },
+        "card": card,
+        "context": _project_context_pack(project).get("counts", {}),
+        "available_skills": list_builtin_skills(),
+    }

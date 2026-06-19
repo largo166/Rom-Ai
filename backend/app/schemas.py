@@ -1,5 +1,7 @@
+from __future__ import annotations
+
 from datetime import datetime
-from typing import Optional
+from typing import Any, Optional
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -70,7 +72,7 @@ class InboxScanJobOut(BaseModel):
     failed_files: int = 0
     current_file: str = ""
     error: str = ""
-    result: dict[str, object] | None = None
+    result: Optional[dict[str, Any]] = None
     created_at: str = ""
     updated_at: str = ""
 
@@ -95,7 +97,7 @@ class InboxBatchAdviceOut(BaseModel):
     total_files: int
     recommended_item_ids: list[str]
     action_counts: dict[str, int]
-    project_groups: list[dict[str, object]]
+    project_groups: list[dict[str, Any]]
     knowledge_candidates: list[dict[str, str]]
     duplicates: list[dict[str, str]]
     needs_review: list[dict[str, str]]
@@ -106,6 +108,36 @@ class InboxBatchAdviceOut(BaseModel):
 class InboxApplyRecommendationsRequest(BaseModel):
     item_ids: list[str]
     force_duplicate_ids: list[str] = []
+
+
+class LocalOrganizeStartRequest(BaseModel):
+    path: str
+    include_subfolders: bool = True
+    days: int = 0
+    source_label: str = "本地整理"
+
+
+class LocalOrganizeApplyRequest(BaseModel):
+    job_id: str
+    selected_item_ids: list[str] = []
+    output_root: str = ""
+    apply_project_library: bool = True
+    apply_knowledge: bool = True
+    force_duplicate_ids: list[str] = []
+
+
+class LocalOrganizeJobOut(BaseModel):
+    job_id: str
+    status: str
+    path: str
+    output_root: str = ""
+    item_ids: list[str] = []
+    advice: Optional[dict[str, Any]] = None
+    manifest_path: str = ""
+    result: Optional[dict[str, Any]] = None
+    error: str = ""
+    created_at: str = ""
+    updated_at: str = ""
 
 
 class InboxApplyRequest(BaseModel):
@@ -377,6 +409,11 @@ class SkillCardRunRequest(BaseModel):
     prompt: str = ""
 
 
+class AgentChatRequest(BaseModel):
+    message: str = Field(min_length=1, max_length=8000)
+    skill_id: str = ""
+
+
 class TeamMemberCreate(BaseModel):
     name: str
     role: str = ""
@@ -447,6 +484,16 @@ class SkillCardOut(BaseModel):
     updated_at: Optional[datetime] = None
 
 
+class AgentChatOut(BaseModel):
+    intent: str
+    confidence: float
+    reason: str
+    selected_skill: dict[str, Any]
+    card: SkillCardOut
+    context: dict[str, Any] = {}
+    available_skills: list[dict[str, Any]] = []
+
+
 class ProjectDetail(ProjectOut):
     files: list[ProjectFileOut] = []
     reports: list[ProjectReportOut] = []
@@ -471,6 +518,10 @@ class SettingsStatusOut(BaseModel):
     deepseek_configured: bool
     deepseek_base_url: str
     deepseek_model: str
+    image_provider: str = "huashu"
+    image_configured: bool = False
+    image_base_url: str = ""
+    image_model: str = ""
     tencent_meeting_configured: bool = False
     default_vault_path: str
     upload_root: str

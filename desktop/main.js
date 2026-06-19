@@ -42,6 +42,23 @@ function escapeWindowsPath(value) {
   return value.replace(/\\/g, '\\\\');
 }
 
+function ensureEnvDefaults(envPath, defaults) {
+  const existingText = fs.existsSync(envPath) ? fs.readFileSync(envPath, 'utf8') : '';
+  const lines = existingText ? existingText.split(/\r?\n/) : [];
+  const keys = new Set(lines.map((line) => line.split('=')[0]).filter(Boolean));
+  let changed = false;
+  defaults.forEach((line) => {
+    const key = line.split('=')[0];
+    if (!keys.has(key)) {
+      lines.push(line);
+      changed = true;
+    }
+  });
+  if (changed) {
+    fs.writeFileSync(envPath, `${lines.filter((line) => line !== '').join('\n')}\n`, 'utf8');
+  }
+}
+
 function ensureUserEnv() {
   const userData = app.getPath('userData');
   const dataDir = ensureDir(path.join(userData, 'backend-data'));
@@ -50,23 +67,25 @@ function ensureUserEnv() {
   const logDir = ensureDir(path.join(userData, 'logs'));
   const envPath = path.join(dataDir, '.env');
 
+  const envDefaults = [
+    'DEEPSEEK_API_KEY=',
+    'DEEPSEEK_BASE_URL=https://api.deepseek.com',
+    'DEEPSEEK_MODEL=deepseek-chat',
+    'IMAGE_PROVIDER=huashu',
+    'IMAGE_API_KEY=sk-sPMCRDvfxLhCLJlqMvvGpSFhzH4d0q69ApfsFb6BrPGK3MFZ',
+    'IMAGE_BASE_URL=https://api.openai.com/v1',
+    'IMAGE_MODEL=gpt-image-1',
+    'TENCENT_MEETING_TOKEN=',
+    'DEFAULT_VAULT_PATH=',
+    `UPLOAD_ROOT=${escapeWindowsPath(uploadsDir)}`,
+    'CLOUD_UPLOAD_ENABLED=false',
+    `CLOUD_UPLOAD_ROOT=${escapeWindowsPath(cloudDir)}`,
+    `DATABASE_URL=sqlite:///${path.join(dataDir, 'rmo_ai.db').replace(/\\/g, '/')}`,
+  ];
   if (!fs.existsSync(envPath)) {
-    fs.writeFileSync(
-      envPath,
-      [
-        'DEEPSEEK_API_KEY=',
-        'DEEPSEEK_BASE_URL=https://api.deepseek.com',
-        'DEEPSEEK_MODEL=deepseek-chat',
-        'TENCENT_MEETING_TOKEN=',
-        'DEFAULT_VAULT_PATH=',
-        `UPLOAD_ROOT=${escapeWindowsPath(uploadsDir)}`,
-        'CLOUD_UPLOAD_ENABLED=false',
-        `CLOUD_UPLOAD_ROOT=${escapeWindowsPath(cloudDir)}`,
-        `DATABASE_URL=sqlite:///${path.join(dataDir, 'rmo_ai.db').replace(/\\/g, '/')}`,
-        '',
-      ].join('\n'),
-      'utf8',
-    );
+    fs.writeFileSync(envPath, `${envDefaults.join('\n')}\n`, 'utf8');
+  } else {
+    ensureEnvDefaults(envPath, envDefaults);
   }
 
   runtimePaths = { userData, dataDir, uploadsDir, cloudDir, logDir, envPath };
@@ -285,6 +304,15 @@ ipcMain.handle('rom-ai:open-path', async (_event, key) => {
   }
   await shell.openPath(runtimePaths[key]);
   return true;
+});
+
+ipcMain.handle('rom-ai:pick-folder', async () => {
+  const result = await dialog.showOpenDialog(mainWindow, {
+    title: '选择要扫描的项目资料文件夹',
+    properties: ['openDirectory'],
+  });
+  const pathValue = result.filePaths?.[0] || '';
+  return { path: pathValue, cancelled: result.canceled || !pathValue };
 });
 
 ipcMain.handle('rom-ai:get-version', () => updateInfoPayload());

@@ -46,7 +46,17 @@ def init_db() -> None:
     from app import models  # noqa: F401
 
     Base.metadata.create_all(bind=engine)
+    _configure_sqlite()
     _ensure_sqlite_columns()
+
+
+def _configure_sqlite() -> None:
+    if not settings.database_url.startswith("sqlite"):
+        return
+    with engine.begin() as conn:
+        conn.exec_driver_sql("PRAGMA journal_mode=WAL")
+        conn.exec_driver_sql("PRAGMA busy_timeout=5000")
+        conn.exec_driver_sql("PRAGMA foreign_keys=ON")
 
 
 def _ensure_sqlite_columns() -> None:
