@@ -374,7 +374,7 @@ export function ProjectDetailPage() {
             {/* Tab 内容区 */}
             <section className="rounded-b-xl border border-t-0 border-white/10 bg-white/[0.03] p-5 backdrop-blur-sm md:p-7">
               {activeTab === 'overview' && (
-                <OverviewTab projectId={id!} project={project} onRefresh={load} />
+                <OverviewTab projectId={id!} project={project} onRefresh={load} onSwitchTab={selectTab as (tab: string) => void} />
               )}
               {activeTab === 'files' && (
                 <FilesTab projectId={id!} project={project} onRefresh={load} />

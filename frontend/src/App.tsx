@@ -12,7 +12,7 @@ import { SettingsPage } from './pages/SettingsPage';
 
 function App() {
   return (
-    <div className="min-h-screen bg-[#0A0A0A] text-white overflow-x-hidden">
+    <div className="min-h-screen bg-[#FAF8F5] text-stone-900 overflow-x-hidden">
       <Navigation />
       <Routes>
         <Route path="/" element={<Navigate to="/projects" replace />} />

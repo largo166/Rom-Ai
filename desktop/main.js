@@ -6,10 +6,16 @@ const http = require('http');
 const net = require('net');
 const path = require('path');
 const fs = require('fs');
+const treeKill = require('tree-kill');
 
 let backendProcess = null;
 let mainWindow = null;
 let runtimePaths = null;
+
+const gotTheLock = app.requestSingleInstanceLock();
+if (!gotTheLock) {
+  app.quit();
+}
 
 const DEFAULT_BACKEND_PORT = 8000;
 
@@ -61,10 +67,10 @@ function ensureEnvDefaults(envPath, defaults) {
 
 function ensureUserEnv() {
   const userData = app.getPath('userData');
-  const dataDir = ensureDir(path.join(userData, 'backend-data'));
+  const dataDir = ensureDir(path.join(userData, 'data'));
   const uploadsDir = ensureDir(path.join(dataDir, 'uploads'));
   const cloudDir = ensureDir(path.join(dataDir, 'cloud'));
-  const logDir = ensureDir(path.join(userData, 'logs'));
+  const logDir = ensureDir(path.join(dataDir, 'logs'));
   const envPath = path.join(dataDir, '.env');
 
   const envDefaults = [
@@ -72,7 +78,7 @@ function ensureUserEnv() {
     'DEEPSEEK_BASE_URL=https://api.deepseek.com',
     'DEEPSEEK_MODEL=deepseek-chat',
     'IMAGE_PROVIDER=huashu',
-    'IMAGE_API_KEY=sk-sPMCRDvfxLhCLJlqMvvGpSFhzH4d0q69ApfsFb6BrPGK3MFZ',
+    'IMAGE_API_KEY=',
     'IMAGE_BASE_URL=https://api.openai.com/v1',
     'IMAGE_MODEL=gpt-image-1',
     'TENCENT_MEETING_TOKEN=',
@@ -94,6 +100,7 @@ function ensureUserEnv() {
 
 function resolveBackendExe() {
   const candidates = [
+    // 新 PyInstaller onedir 产物（extraResources -> backend）
     path.join(process.resourcesPath, 'backend', 'rom-ai-backend', 'rom-ai-backend.exe'),
     path.join(process.resourcesPath, 'backend', 'rom-ai-backend.exe'),
     path.join(process.resourcesPath, 'app.asar.unpacked', 'backend', 'rom-ai-backend', 'rom-ai-backend.exe'),
@@ -105,6 +112,10 @@ function resolveBackendExe() {
     exe: candidates.find((candidate) => fs.existsSync(candidate)),
     candidates,
   };
+}
+
+function getDevBackendScript() {
+  return path.join(__dirname, '..', 'backend', 'entry.py');
 }
 
 function isPortFree(port) {
@@ -136,7 +147,7 @@ function waitForBackendHealth(port, timeoutMs = 30000) {
   const deadline = Date.now() + timeoutMs;
   return new Promise((resolve, reject) => {
     function check() {
-      const request = http.get(`http://127.0.0.1:${port}/api/health`, (response) => {
+      const request = http.get(`http://127.0.0.1:${port}/health`, (response) => {
         response.resume();
         if (response.statusCode && response.statusCode >= 200 && response.statusCode < 300) {
           resolve();
@@ -164,28 +175,40 @@ function waitForBackendHealth(port, timeoutMs = 30000) {
 }
 
 async function startBackend() {
-  const { exe, candidates } = resolveBackendExe();
-  if (!exe) {
-    throw new Error(`Cannot find backend executable rom-ai-backend.exe.\nChecked:\n${candidates.join('\n')}`);
-  }
-
   const port = await findBackendPort();
-  const { dataDir, envPath, logDir } = ensureUserEnv();
+  const { dataDir, logDir } = ensureUserEnv();
   const outLog = openAppendStream(path.join(logDir, 'backend.log'));
   const errLog = openAppendStream(path.join(logDir, 'backend-error.log'));
-  outLog.write(`\n[${new Date().toISOString()}] Starting backend: ${exe}\n`);
 
-  backendProcess = spawn(exe, [], {
-    cwd: dataDir,
-    env: {
-      ...process.env,
-      ROM_AI_ENV_FILE: envPath,
-      ROM_AI_BASE_DIR: dataDir,
-      ROM_AI_LOG_DIR: logDir,
-      ROM_AI_BACKEND_PORT: String(port),
-    },
-    windowsHide: true,
-  });
+  const env = {
+    ...process.env,
+    RMO_DATA_DIR: dataDir,
+    PYTHONUTF8: '1',
+  };
+
+  if (app.isPackaged) {
+    const { exe, candidates } = resolveBackendExe();
+    if (!exe) {
+      throw new Error(`Cannot find backend executable rmo-ai-backend.exe.\nChecked:\n${candidates.join('\n')}`);
+    }
+    outLog.write(`\n[${new Date().toISOString()}] Starting packaged backend: ${exe}\n`);
+    backendProcess = spawn(exe, ['--port', String(port)], {
+      env,
+      windowsHide: true,
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+  } else {
+    const script = getDevBackendScript();
+    if (!fs.existsSync(script)) {
+      throw new Error(`Development backend entry not found: ${script}`);
+    }
+    outLog.write(`\n[${new Date().toISOString()}] Starting dev backend: python ${script}\n`);
+    backendProcess = spawn('python', [script, '--port', String(port)], {
+      env,
+      windowsHide: true,
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+  }
 
   backendProcess.stdout?.pipe(outLog);
   backendProcess.stderr?.pipe(errLog);
@@ -236,7 +259,9 @@ function stopBackend() {
   if (!backendProcess) return;
   const child = backendProcess;
   backendProcess = null;
-  if (!child.killed) child.kill();
+  if (child.pid && !child.killed) {
+    treeKill(child.pid, 'SIGTERM');
+  }
 }
 
 function setupAutoUpdate() {
@@ -338,3 +363,5 @@ app.on('window-all-closed', () => {
   stopBackend();
   app.quit();
 });
+
+process.on('exit', stopBackend);

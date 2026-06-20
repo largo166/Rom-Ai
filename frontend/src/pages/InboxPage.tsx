@@ -1,11 +1,15 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Link, useSearchParams } from 'react-router';
-import { Archive, Check, ChevronDown, ChevronUp, Database, FolderInput, Loader2, RefreshCw, Trash2, Upload, Wand2 } from 'lucide-react';
+import { Archive, Check, ChevronDown, ChevronUp, Database, FolderInput, Loader2, RefreshCw, Trash2, Upload, Wand2, Sparkles } from 'lucide-react';
+import { ArchiveWizard } from '../components/inbox/ArchiveWizard';
+import { ArchivePlanPreview } from '../components/inbox/ArchivePlanPreview';
+import { RecommendationPanel } from '../components/knowledge/RecommendationPanel';
 import {
   applyInbox,
   applyInboxRecommendations,
   deleteInboxItem,
   deleteInboxItems,
+  generateBatchArchivePlan,
   getInboxBatchAdvice,
   getInboxScanJob,
   getLatestInboxScanJob,
@@ -19,6 +23,7 @@ import {
   type InboxBatchAdvice,
   type InboxScanJob,
   type ProjectSummary,
+  type BatchArchivePlanResponse,
 } from '../lib/projectsApi';
 
 const columns = ['可直接确认', '未归属项目', '重复文件', '需审核', '已归档', '已进入知识库'];
@@ -46,6 +51,12 @@ export function InboxPage() {
   const [expandedIds, setExpandedIds] = useState<Record<string, boolean>>({});
   const [batchAdvice, setBatchAdvice] = useState<InboxBatchAdvice | null>(null);
   const [scanJob, setScanJob] = useState<InboxScanJob | null>(null);
+  const [showArchiveWizard, setShowArchiveWizard] = useState(false);
+  const [showPlanPreview, setShowPlanPreview] = useState(false);
+  const [archivePlan, setArchivePlan] = useState<BatchArchivePlanResponse | null>(null);
+  const [planLoading, setPlanLoading] = useState(false);
+  const [planExecuting, setPlanExecuting] = useState(false);
+  const [archiveResult, setArchiveResult] = useState<{ projectId: string; fileNames: string } | null>(null);
   const scanRunning = scanJob?.status === 'queued' || scanJob?.status === 'running';
 
   async function load() {
@@ -309,6 +320,10 @@ export function InboxPage() {
       await load();
       await refreshBatchAdvice();
       setMessage(`批量完成：归档 ${result.files.length} 个，创建项目 ${result.created_project_count} 个，跳过 ${result.skipped_count} 个。`);
+      // 归档成功后触发知识推荐
+      const firstProjectId = batchAdvice?.project_groups?.[0]?.project_id || '';
+      const fileNames = items.filter((i) => ids.includes(i.id)).map((i) => i.original_filename).join(',');
+      if (firstProjectId) setArchiveResult({ projectId: firstProjectId, fileNames });
     } catch (error) {
       setMessage(`批量归档失败：${String(error)}`);
       setBusy(false);
@@ -325,6 +340,61 @@ export function InboxPage() {
       setMessage(`生成整体建议失败：${String(error)}`);
     } finally {
       setBusy(false);
+    }
+  }
+
+  async function onGenerateArchivePlan() {
+    const itemIds = items.length > 0 ? items.map((item) => item.id) : undefined;
+    setPlanLoading(true);
+    setPlanExecuting(false);
+    setArchivePlan(null);
+    setShowPlanPreview(true);
+    setMessage('');
+    try {
+      const plan = await generateBatchArchivePlan({ item_ids: itemIds, format_markdown: true });
+      setArchivePlan(plan);
+    } catch (error) {
+      setMessage(`生成归档方案失败：${String(error)}`);
+      setShowPlanPreview(false);
+    } finally {
+      setPlanLoading(false);
+    }
+  }
+
+  async function onConfirmArchivePlan() {
+    if (!archivePlan) return;
+    const itemIds = archivePlan.groups
+      .flatMap((group) => group.files)
+      .filter((file) => file.action !== 'skip')
+      .map((file) => file.id);
+    if (!itemIds.length) {
+      setMessage('没有可执行的归档文件。');
+      return;
+    }
+    setPlanExecuting(true);
+    setMessage('正在执行批量归档...');
+    try {
+      const result = await applyInboxRecommendations(itemIds);
+      setShowPlanPreview(false);
+      setArchivePlan(null);
+      await load();
+      await refreshBatchAdvice();
+      setMessage(`归档完成：归档 ${result.files.length} 个，创建项目 ${result.created_project_count} 个，跳过 ${result.skipped_count} 个。`);
+      // 归档成功后触发知识推荐
+      const firstProjectId = batchAdvice?.project_groups?.[0]?.project_id || '';
+      const fileNames = archivePlan?.groups.flatMap((g) => g.files).map((f) => f.original_name).join(',') || '';
+      if (firstProjectId) setArchiveResult({ projectId: firstProjectId, fileNames });
+    } catch (error) {
+      setMessage(`归档执行失败：${String(error)}`);
+    } finally {
+      setPlanExecuting(false);
+    }
+  }
+
+  function onCancelArchivePlan() {
+    setShowPlanPreview(false);
+    if (!planExecuting) {
+      setArchivePlan(null);
     }
   }
 
@@ -392,6 +462,14 @@ export function InboxPage() {
               <Wand2 size={16} />
               整体归档建议
             </button>
+            <button
+              onClick={onGenerateArchivePlan}
+              disabled={busy || planLoading || items.length === 0}
+              className="inline-flex items-center gap-2 rounded-lg bg-amber-400 px-4 py-2 text-sm font-semibold text-black hover:bg-amber-300 disabled:opacity-50"
+            >
+              {planLoading ? <Loader2 size={16} className="animate-spin" /> : <Sparkles size={16} />}
+              智能归档
+            </button>
           </div>
         </div>
 
@@ -419,6 +497,43 @@ export function InboxPage() {
         </div>
 
         {message && <div className="mb-5 rounded-lg border border-[#333333] bg-[#171717] p-3 text-sm text-zinc-300">{message}</div>}
+
+        {/* 归档完成后知识推荐 */}
+        {archiveResult && archiveResult.projectId && (
+          <div className="mb-5">
+            <RecommendationPanel
+              projectId={archiveResult.projectId}
+              trigger="archive"
+              options={archiveResult.fileNames ? { file_names: archiveResult.fileNames } : undefined}
+            />
+          </div>
+        )}
+
+        <section className="mb-5 rounded-lg border border-amber-400/25 bg-[#15120A] p-4">
+          <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+            <div>
+              <h2 className="text-base font-semibold text-white flex items-center gap-2">
+                <Archive size={18} className="text-amber-400" />
+                一键归档向导
+              </h2>
+              <p className="mt-1 text-sm text-zinc-400">
+                选择本地文件夹，系统自动分层扫描、规则分类、生成归档方案，确认后复制到新结构并自动入库。
+              </p>
+            </div>
+            <button
+              onClick={() => setShowArchiveWizard((v) => !v)}
+              className="inline-flex items-center justify-center gap-2 rounded-lg bg-amber-400 px-4 py-2 text-sm font-semibold text-black hover:bg-amber-300"
+            >
+              {showArchiveWizard ? <ChevronUp size={16} /> : <ChevronDown size={16} />}
+              {showArchiveWizard ? '收起向导' : '打开向导'}
+            </button>
+          </div>
+          {showArchiveWizard && (
+            <div className="mt-4">
+              <ArchiveWizard />
+            </div>
+          )}
+        </section>
 
         {scanJob && (
           <section className="mb-5 rounded-lg border border-blue-400/20 bg-blue-400/5 p-4">
@@ -658,6 +773,15 @@ export function InboxPage() {
           ))}
         </div>
       </div>
+
+      <ArchivePlanPreview
+        open={showPlanPreview}
+        plan={archivePlan}
+        loading={planLoading}
+        executing={planExecuting}
+        onConfirm={onConfirmArchivePlan}
+        onCancel={onCancelArchivePlan}
+      />
     </main>
   );
 }

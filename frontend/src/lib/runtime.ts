@@ -35,7 +35,7 @@ declare global {
   }
 }
 
-const fallbackApiBase = (import.meta.env.VITE_API_BASE ?? 'http://127.0.0.1:8000').replace(/\/$/, '');
+const fallbackApiBase = (import.meta.env.VITE_API_BASE ?? 'http://127.0.0.1:8001').replace(/\/$/, '');
 
 function readInitialRuntime(): RomAIRuntime | null {
   if (typeof window === 'undefined') return null;

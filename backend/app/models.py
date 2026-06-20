@@ -1,7 +1,8 @@
 ﻿from datetime import datetime
+from typing import Optional
 from uuid import uuid4
 
-from sqlalchemy import DateTime, Float, ForeignKey, Integer, Text, func
+from sqlalchemy import DateTime, Float, ForeignKey, Integer, String, Text, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.database import Base
@@ -21,6 +22,13 @@ class Project(Base):
     phase: Mapped[str] = mapped_column(default="")
     description: Mapped[str] = mapped_column(Text, default="")
     status: Mapped[str] = mapped_column(default="active")
+    # Phase 3: 项目概览指挥台扩展字段
+    client_name: Mapped[str] = mapped_column(String, nullable=True)
+    client_contact: Mapped[str] = mapped_column(String, nullable=True)
+    client_demands: Mapped[str] = mapped_column(Text, nullable=True)
+    milestones: Mapped[str] = mapped_column(Text, nullable=True)
+    deliverables: Mapped[str] = mapped_column(Text, nullable=True)
+    risk_summary: Mapped[str] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), onupdate=func.now())
 
@@ -35,6 +43,7 @@ class Project(Base):
     meetings: Mapped[list["Meeting"]] = relationship(back_populates="project", cascade="all, delete-orphan")
     skill_cards: Mapped[list["SkillCard"]] = relationship(back_populates="project", cascade="all, delete-orphan")
     team_assignments: Mapped[list["TeamAssignment"]] = relationship(back_populates="project", cascade="all, delete-orphan")
+    change_events: Mapped[list["ProjectChangeEvent"]] = relationship(back_populates="project", cascade="all, delete-orphan")
 
     @property
     def assignments(self) -> list["TeamAssignment"]:
@@ -92,6 +101,9 @@ class InboxItem(Base):
     recommended_action: Mapped[str] = mapped_column(default="")
     recommend_knowledge_reason: Mapped[str] = mapped_column(Text, default="")
     archive_group: Mapped[str] = mapped_column(default="待确认", index=True)
+    # 版本追踪
+    version_tag: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)
+    parent_item_id: Mapped[Optional[str]] = mapped_column(ForeignKey("inbox_items.id"), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), onupdate=func.now())
 
@@ -107,6 +119,10 @@ class ProjectReport(Base):
     model_name: Mapped[str] = mapped_column(default="")
     mode: Mapped[str] = mapped_column(default="mock")
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+
+    # 增量分析关联
+    parent_report_id: Mapped[Optional[str]] = mapped_column(ForeignKey("project_reports.id"), nullable=True)
+    diff_summary: Mapped[Optional[str]] = mapped_column(Text, nullable=True)  # 变化摘要 Markdown
 
     project: Mapped[Project] = relationship(back_populates="reports")
 
@@ -271,11 +287,17 @@ class Meeting(Base):
     id: Mapped[str] = mapped_column(primary_key=True, default=new_id)
     project_id: Mapped[str] = mapped_column(ForeignKey("projects.id"), index=True)
     title: Mapped[str] = mapped_column(default="")
+    meeting_type: Mapped[str] = mapped_column(String(30), default="项目会议")
     date: Mapped[datetime] = mapped_column(DateTime, nullable=True)
     agenda: Mapped[str] = mapped_column(Text, default="")
     minutes: Mapped[str] = mapped_column(Text, default="")
     todos: Mapped[str] = mapped_column(Text, default="[]")
     recording_url: Mapped[str] = mapped_column(default="", nullable=True)
+    # 音频转写
+    audio_file_path: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
+    audio_transcribed_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    transcription_source: Mapped[Optional[str]] = mapped_column(String(30), nullable=True)
+    # 可选值: whisper, tencent, manual
     tencent_join_url: Mapped[str] = mapped_column(default="")
     tencent_meeting_code: Mapped[str] = mapped_column(default="")
     tencent_meeting_id: Mapped[str] = mapped_column(default="")
@@ -293,10 +315,6 @@ class Meeting(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
 
     project: Mapped[Project] = relationship(back_populates="meetings")
-
-    @property
-    def meeting_type(self) -> str:
-        return "项目会议"
 
     @property
     def meeting_link(self) -> str:
@@ -398,3 +416,37 @@ class KnowledgeItem(Base):
     item_type: Mapped[str] = mapped_column(default="general")
     tags: Mapped[str] = mapped_column(Text, default="[]", nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+
+
+class ProjectChangeEvent(Base):
+    """项目变更事件 - 统一记录项目中发生的所有变更"""
+    __tablename__ = "project_change_events"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    project_id: Mapped[str] = mapped_column(ForeignKey("projects.id"), index=True)
+
+    # 事件类型
+    event_type: Mapped[str] = mapped_column(String(50))
+    # 可选值: file_uploaded, meeting_confirmed, client_demands_updated,
+    #         startup_analysis_generated, okf_stale, risk_updated,
+    #         meeting_transcript_ready
+
+    # 来源
+    source_type: Mapped[Optional[str]] = mapped_column(String(30), nullable=True)
+    # 可选值: meeting, file, manual, system
+    source_id: Mapped[Optional[str]] = mapped_column(nullable=True)
+
+    # 变更详情
+    affected_fields: Mapped[Optional[str]] = mapped_column(Text, nullable=True)  # JSON array of field names
+    old_snapshot: Mapped[Optional[str]] = mapped_column(Text, nullable=True)  # JSON
+    new_snapshot: Mapped[Optional[str]] = mapped_column(Text, nullable=True)  # JSON
+    description: Mapped[Optional[str]] = mapped_column(Text, nullable=True)  # 人可读描述
+
+    # 消费追踪
+    consumed_by_analysis: Mapped[bool] = mapped_column(default=False)
+    consumed_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+
+    # 时间戳
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+
+    project: Mapped[Project] = relationship(back_populates="change_events")

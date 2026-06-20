@@ -1,0 +1,20 @@
+{
+  "manifest_id": "manifest_20260620_011625",
+  "plan_id": "plan_20260620_011625",
+  "operations": [
+    {
+      "action": "copy",
+      "source": "C:\\Users\\yz_ya\\AppData\\Local\\Temp\\tmpcqsezptv\\source\\任务书.txt",
+      "target": "C:\\Users\\yz_ya\\AppData\\Local\\Temp\\tmpcqsezptv\\target\\01-任务书\\任务书.txt",
+      "timestamp": "2026-06-20T01:16:25.751400"
+    },
+    {
+      "action": "copy",
+      "source": "C:\\Users\\yz_ya\\AppData\\Local\\Temp\\tmpcqsezptv\\source\\参考案例.txt",
+      "target": "C:\\Users\\yz_ya\\AppData\\Local\\Temp\\tmpcqsezptv\\target\\08-案例\\参考案例.txt",
+      "timestamp": "2026-06-20T01:16:25.751400"
+    }
+  ],
+  "created_at": "2026-06-20T01:16:25.750391",
+  "can_undo": true
+}

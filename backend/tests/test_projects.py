@@ -9,7 +9,7 @@ from sqlalchemy.orm import sessionmaker
 from app import models, schemas
 from app.database import Base
 from app.services import delete_project_library, search_knowledge, summarize_meeting
-from app.routes.projects import assign_project_task, create_project_meeting, create_project_task, delete_project_execution_run, delete_project_file, delete_project_meeting, delete_project_task, parse_one_project_file, preview_project_file, sync_tencent_project_meeting_minutes, update_project_task
+from app.routes.projects import assign_project_task, create_communication, create_project_meeting, create_project_task, delete_project_execution_run, delete_project_file, delete_project_meeting, delete_project_task, parse_one_project_file, preview_project_file, sync_tencent_project_meeting_minutes, update_project_task
 from app.routes.team import (
     add_team_member,
     get_all_members,
@@ -145,12 +145,12 @@ class ProjectTeamWorkflowTest(unittest.TestCase):
             asyncio.run(summarize_meeting(db, meeting))
             chunks = search_knowledge(db, "真实会议 消防登高面 日照退界", limit=5)
             summary_file = db.query(models.KnowledgeFile).filter_by(
-                filepath=f"project-deposits/{project.id}/meetings/{meeting.id}.md"
+                filepath=f"project-context/{project.id}/meetings/{meeting.id}.md"
             ).one()
 
             self.assertTrue(chunks)
             self.assertTrue(any("消防登高面" in chunk.content for chunk in chunks))
-            self.assertTrue(any(f"project-deposits/{project.id}/meeting-transcripts/{meeting.id}.md" in chunk.path for chunk in chunks))
+            self.assertTrue(any(f"project-context/{project.id}/meeting-transcripts/{meeting.id}.md" in chunk.path for chunk in chunks))
             summary_content = "\n".join(
                 chunk.content for chunk in db.query(models.KnowledgeChunk).filter_by(file_id=summary_file.id)
             )
@@ -183,11 +183,11 @@ class ProjectTeamWorkflowTest(unittest.TestCase):
             db.refresh(meeting)
 
             asyncio.run(summarize_meeting(db, meeting))
-            indexed_path = f"project-deposits/{project.id}/meetings/{meeting.id}.md"
+            indexed_path = f"project-context/{project.id}/meetings/{meeting.id}.md"
             knowledge_file = db.query(models.KnowledgeFile).filter_by(filepath=indexed_path).one()
             knowledge_file_id = knowledge_file.id
             transcript_file = db.query(models.KnowledgeFile).filter_by(
-                filepath=f"project-deposits/{project.id}/meeting-transcripts/{meeting.id}.md"
+                filepath=f"project-context/{project.id}/meeting-transcripts/{meeting.id}.md"
             ).one()
             transcript_file_id = transcript_file.id
 
@@ -357,6 +357,41 @@ class ProjectTeamWorkflowTest(unittest.TestCase):
             with self.assertRaises(Exception) as context:
                 delete_project_execution_run(project.id, other_run.id, db)
             self.assertEqual(context.exception.status_code, 404)
+        finally:
+            db.close()
+
+
+class CommunicationEndpointTest(unittest.TestCase):
+    def open_temp_db(self):
+        engine = create_engine("sqlite:///:memory:", connect_args={"check_same_thread": False})
+        Base.metadata.create_all(bind=engine)
+        return sessionmaker(autocommit=False, autoflush=False, bind=engine)()
+
+    def test_create_communication_persists_meeting_and_generates_minutes(self):
+        db = self.open_temp_db()
+        try:
+            project = models.Project(name="沟通测试项目", city="杭州", phase="方案")
+            db.add(project)
+            db.commit()
+            db.refresh(project)
+
+            payload = schemas.CommunicationCreate(
+                communication_type="phone",
+                title="电话沟通",
+                participants="甲方王总",
+                content="甲方说：这个方案不够高级，希望入口再大气一点。",
+                occurred_at="2026-06-20T10:00:00+08:00",
+            )
+            result = asyncio.run(create_communication(project.id, payload, db))
+
+            meeting = result["meeting"]
+            self.assertEqual(meeting.project_id, project.id)
+            self.assertEqual(meeting.meeting_type, "phone")
+            self.assertIn("不够高级", meeting.transcript)
+            self.assertEqual(meeting.status, "summarized")
+            self.assertTrue(result["minutes"]["meeting_content"] or result["minutes"]["action_items"] is not None)
+            self.assertTrue(len(result["rule_translations"]) > 0)
+            self.assertTrue(db.query(models.ProjectChangeEvent).filter_by(event_type="communication_added").count() >= 1)
         finally:
             db.close()
 

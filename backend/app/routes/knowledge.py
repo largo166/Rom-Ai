@@ -1,9 +1,11 @@
-from datetime import datetime
+import logging
 from pathlib import Path
 from threading import Thread
 from typing import Optional
 from typing import Optional
 from uuid import uuid4
+
+logger = logging.getLogger(__name__)
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from sqlalchemy import delete, select
@@ -12,7 +14,10 @@ from sqlalchemy.orm import Session
 from app import models, schemas
 from app.cloud import mirror_knowledge_upload
 from app.config import settings
-from app.database import get_db
+from app.database import engine, get_db
+from app.security import PathValidationError, get_allowed_roots, validate_path
+from app.utils import utc_now_iso
+from app.retrieval import FTS5RetrievalEngine, rebuild_fts_index
 from app.services import (
     MAX_BROWSER_UPLOAD_SIZE,
     SUPPORTED_KNOWLEDGE_EXTS,
@@ -36,23 +41,43 @@ INDEX_JOBS: dict[str, dict] = {}
 
 @router.post("/scan")
 def scan(payload: schemas.KnowledgeScanRequest, db: Session = Depends(get_db)):
-    path = Path(payload.path)
-    if not path.exists() or not path.is_dir():
+    try:
+        path = validate_path(payload.path, allowed_bases=get_allowed_roots(), must_exist=True)
+    except PathValidationError as e:
+        raise HTTPException(status_code=400, detail=f"路径校验失败：{e}")
+    if not path.is_dir():
         raise HTTPException(status_code=404, detail=f"目录不存在：{payload.path}")
-    return scan_knowledge_directory(db, path, clear_existing=payload.clear_existing)
+    result = scan_knowledge_directory(db, path, clear_existing=payload.clear_existing)
+    try:
+        rebuild_fts_index(engine)
+    except Exception as exc:
+        logger.warning("Rebuild FTS5 after scan failed (non-fatal): %s", exc)
+    return result
 
 
 @router.post("/index-vault")
 def index_vault(payload: schemas.KnowledgeIndexRequest, db: Session = Depends(get_db)):
-    path = Path(payload.path or settings.default_vault_path)
-    if not path.exists() or not path.is_dir():
+    try:
+        path = validate_path(
+            payload.path or settings.default_vault_path,
+            allowed_bases=get_allowed_roots(),
+            must_exist=True,
+        )
+    except PathValidationError as e:
+        raise HTTPException(status_code=400, detail=f"路径校验失败：{e}")
+    if not path.is_dir():
         raise HTTPException(status_code=404, detail=f"目录不存在：{path}")
-    return scan_vault_directory(
+    result = scan_vault_directory(
         db,
         path,
         clear_existing=payload.clear_existing,
         include_sync_notes=payload.include_sync_notes,
     )
+    try:
+        rebuild_fts_index(engine)
+    except Exception as exc:
+        logger.warning("Rebuild FTS5 after vault index failed (non-fatal): %s", exc)
+    return result
 
 
 def _run_index_job(job_id: str, path: Path, payload: schemas.KnowledgeIndexRequest) -> None:
@@ -78,8 +103,15 @@ def _run_index_job(job_id: str, path: Path, payload: schemas.KnowledgeIndexReque
 
 @router.post("/index-vault/start")
 def start_index_vault(payload: schemas.KnowledgeIndexRequest):
-    path = Path(payload.path or settings.default_vault_path)
-    if not path.exists() or not path.is_dir():
+    try:
+        path = validate_path(
+            payload.path or settings.default_vault_path,
+            allowed_bases=get_allowed_roots(),
+            must_exist=True,
+        )
+    except PathValidationError as e:
+        raise HTTPException(status_code=400, detail=f"路径校验失败：{e}")
+    if not path.is_dir():
         raise HTTPException(status_code=404, detail=f"目录不存在：{path}")
     job_id = uuid4().hex
     INDEX_JOBS[job_id] = {
@@ -93,7 +125,7 @@ def start_index_vault(payload: schemas.KnowledgeIndexRequest):
         "indexed_files": 0,
         "skipped_files": 0,
         "current_file": "",
-        "created_at": datetime.utcnow().isoformat(),
+        "created_at": utc_now_iso(),
     }
     Thread(target=_run_index_job, args=(job_id, path, payload), daemon=True).start()
     return INDEX_JOBS[job_id]
@@ -148,6 +180,10 @@ async def upload_folder(
         display_path = f"{source_label}/{relative}".replace("\\", "/")
         indexed.append(index_knowledge_file(db, target, display_path=display_path))
     db.commit()
+    try:
+        rebuild_fts_index(engine)
+    except Exception as exc:
+        logger.warning("Rebuild FTS5 after upload failed (non-fatal): %s", exc)
     return {
         "indexed_files": len(indexed),
         "skipped_files": skipped,
@@ -158,10 +194,18 @@ async def upload_folder(
 
 @router.post("/reindex")
 def reindex(payload: schemas.KnowledgeScanRequest, db: Session = Depends(get_db)):
-    path = Path(payload.path)
-    if not path.exists() or not path.is_dir():
+    try:
+        path = validate_path(payload.path, allowed_bases=get_allowed_roots(), must_exist=True)
+    except PathValidationError as e:
+        raise HTTPException(status_code=400, detail=f"路径校验失败：{e}")
+    if not path.is_dir():
         raise HTTPException(status_code=404, detail=f"目录不存在：{payload.path}")
-    return scan_knowledge_directory(db, path, clear_existing=True)
+    result = scan_knowledge_directory(db, path, clear_existing=True)
+    try:
+        rebuild_fts_index(engine)
+    except Exception as exc:
+        logger.warning("Rebuild FTS5 after reindex failed (non-fatal): %s", exc)
+    return result
 
 
 @router.post("/incremental")
@@ -265,34 +309,39 @@ def search_knowledge_items(
     project_id: Optional[str] = None,
     db: Session = Depends(get_db),
 ):
-    """搜索知识库条目"""
-    query = select(models.KnowledgeItem)
-    if q:
-        query = query.where(
-            models.KnowledgeItem.content.ilike(f"%{q}%")
-            | models.KnowledgeItem.summary.ilike(f"%{q}%")
-        )
-    if project_id:
-        query = query.where(models.KnowledgeItem.project_id == project_id)
-    query = query.limit(20)
-    items = list(db.scalars(query))
+    """搜索知识库条目（FTS5 全文检索）"""
+    retrieval = FTS5RetrievalEngine(engine)
+    results = retrieval.search(q, top_k=20) if q.strip() else []
+    items = [
+        {
+            "chunk_id": r["chunk_id"],
+            "file_name": Path(r["path"]).name if r["path"] else "",
+            "file_path": r["path"],
+            "heading": r["title"],
+            "quote": r["content"][:520],
+            "score": r["score"],
+        }
+        for r in results
+    ]
     return {"items": items, "total": len(items)}
 
 
 @router.post("/search")
 def search_knowledge_chunks(payload: schemas.KnowledgeSearchRequest, db: Session = Depends(get_db)):
-    """面向程序流程的知识检索：返回可引用的索引片段。"""
+    """面向程序流程的知识检索：返回可引用的索引片段（FTS5）。"""
     limit = max(1, min(payload.limit, 20))
-    chunks = search_knowledge(db, payload.question, limit=limit)
+    retrieval = FTS5RetrievalEngine(engine)
+    results = retrieval.search(payload.question, top_k=limit)
     items = [
         {
-            "chunk_id": chunk.id,
-            "file_name": Path(chunk.path).name,
-            "file_path": chunk.path,
-            "heading": chunk.heading,
-            "quote": chunk.content[:520],
+            "chunk_id": r["chunk_id"],
+            "file_name": Path(r["path"]).name if r["path"] else "",
+            "file_path": r["path"],
+            "heading": r["title"],
+            "quote": r["content"][:520],
+            "score": r["score"],
         }
-        for chunk in chunks
+        for r in results
     ]
     return {"items": items, "total": len(items)}
 
@@ -318,18 +367,36 @@ async def knowledge_chat(payload: schemas.KnowledgeChatRequest, db: Session = De
         return {"mode": "mock", **MOCK_KNOWLEDGE_CHAT_ANSWER}
 
 
+@router.post("/rebuild-fts")
+def rebuild_fts_index_endpoint():
+    """重建 FTS5 全文索引"""
+    try:
+        rebuild_fts_index(engine)
+        return {"success": True, "message": "FTS5 索引重建完成"}
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"FTS5 索引重建失败：{exc}")
+
+
 @router.post("/index")
 def index_knowledge_directory(payload: schemas.KnowledgeIndexRequest, db: Session = Depends(get_db)):
     """索引指定目录"""
-    path = Path(payload.path)
-    if not path.exists() or not path.is_dir():
+    try:
+        path = validate_path(payload.path, allowed_bases=get_allowed_roots(), must_exist=True)
+    except PathValidationError as e:
+        raise HTTPException(status_code=400, detail=f"路径校验失败：{e}")
+    if not path.is_dir():
         raise HTTPException(status_code=404, detail=f"目录不存在：{payload.path}")
-    return scan_vault_directory(
+    result = scan_vault_directory(
         db,
         path,
         clear_existing=payload.clear_existing,
         include_sync_notes=payload.include_sync_notes,
     )
+    try:
+        rebuild_fts_index(engine)
+    except Exception as exc:
+        logger.warning("Rebuild FTS5 after index failed (non-fatal): %s", exc)
+    return result
 
 
 @router.get("/items", response_model=list[schemas.KnowledgeItemOut])

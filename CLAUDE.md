@@ -1,12 +1,132 @@
-# Rmo-AI Desktop Mainline Rules
+# CLAUDE.md — Rmo-AI 桌面端 · 常驻规则
 
-1. The only active product mainline is `ROM-AI-local-demo`.
-2. The current product target is a local Windows desktop app. Server, multi-user, object storage, JWT, CORS serverization, and SaaS work are extension seams only.
-3. The knowledge base is the context backbone. Judgment, strategy, translation, risk, reuse, and review outputs should prefer project context plus knowledge retrieval and cite sources where possible. Simple formatting and copy tasks do not require retrieval.
-4. Real user file operations must be previewable, reversible, and non-destructive by default. AI proposes structured plans; the system executes only after confirmation.
-5. `get_current_principal()` is a future seam for identity, not a login/auth system for this desktop round.
-6. Do not delete packaging, build, migration, or demo chains. Deprecated branches should be archived or marked, not silently removed.
-7. Project Center is for reading project state. AI Agent is for executing project-bound tasks. Do not turn AI Agent into a duplicate dashboard.
-8. Built-in skills must run inside Rmo-AI at runtime. Codex/Claude can help development but must not be required for installed users.
-9. Skill logic, prompt templates, execution chain, output schema, and writeback behavior are built into the app.
-10. API credentials are runtime configuration. The desktop app may prefill local runtime config for an installed single-user build, but synchronized files and docs must not depend on external assistants.
+> 这是 Claude Code / Codex 在本仓库**每次动作前必须读取并遵守**的规则文件。
+> **权威规格** = 《Rmo-AI 桌面端执行纲要 v2》（知识库闭环版）。`执行纲要-v1.1.md` 为早期版本，已被 v2 取代；**两者冲突一律以 v2 为准**（具体裁定见文末第 7 节）。
+> 本文件只放不可动摇的原则、范围边界、红线、工作方法。详细功能规格去读 v2 纲要，不在此重复。
+
+---
+
+## 0. 这个项目是什么
+
+Rmo-AI 是一个**本地桌面端 AI 工作台**（Electron + FastAPI + React + SQLite，AI 走 DeepSeek），服务**建筑设计前期**。架构主线是「**知识库为中枢的闭环**」：
+
+```
+文件收件箱（入口）→ 设计知识库（底座）→ 项目中心（现场）
+→ AI 代理（动作）→ 会议 / 任务 / 成果 → 再回流知识库
+```
+
+模块分工：知识库是底座 · 项目中心是现场 · AI 代理是动作 · 收件箱是入口 · 数字网络是协作（暂缓）· 老板驾驶舱是判断（暂缓）。
+
+---
+
+## 1. 第一原则 / 常驻规则（不可动摇）
+
+1. **桌面端优先**（Windows 本地），唯一主线 = `ROM-AI-local-demo`。
+2. 本轮**不做**：服务器化、多人协作、对象存储、JWT / 多租户、复杂权限——只留接口，不实现。
+3. **知识库为中枢**：判断类输出（研判 / 转译 / 竞品 / 方案评审 / 风险 / 可复用）必须先检索知识库、基于真实材料生成、并带出处（RAG）；简单格式化 / 复制 / 排版类任务不强制 RAG；AI 不凭空说。
+4. **用户真实文件操作**：可预览、可撤销、默认不破坏；AI 只提建议和结构化计划，不直接执行高风险动作。
+5. `get_current_principal()` 是未来扩展点，**不是登录 / 认证系统**。
+6. **死代码只标 deprecated + 归档，不自行删**；打包 / 构建（PyInstaller、electron-builder）/ 迁移 / 演示链路**禁止删除**。
+7. 概览只展示关键判断，细节进对应 tab；产品服务建筑设计前期，**不泛化成通用项目管理工具**。
+8. **不堆功能**：用下面的「检验尺子」过滤。
+9. **运行时独立 + 技能内置**：Codex / Claude 只参与开发，**绝不参与用户运行时**。所有技能卡逻辑、Prompt 模板、执行链路、输出 schema 必须内置在 Rmo-AI 本体，安装后可离线独立执行；技能卡不是占位按钮，必须能被左侧对话框自动触发并产出成果卡。
+10. **密钥边界**：API Key **绝不写进技能卡源码 / body / 任何会同步的文件**；只放本机配置（`.env` 或设置页），打包可预置以做到开箱即用，但该配置文件必须 gitignore + 排除出 GitHub / Obsidian 同步；换 key 改一处配置、不动卡。AI 生图默认 `provider = huashu`。
+
+**检验尺子**（每个功能上之前先问）：有没有让真实上下文更完整？有没有让知识库更有用？有没有让项目判断更可靠？答案否定就先不做。
+
+---
+
+## 2. 范围边界：ON / 留接缝 / OFF
+
+**ON（本轮做）**：收件箱一键归档 + 归档即入库；设计知识库（三类 + 方法论底座 + FTS5/BM25 检索）；项目概览指挥台；会议纪要卡完整链路；AI 代理上下文执行台 + 核心技能卡。
+
+**留接缝（本轮只定义接口、不做完整实现）**：`StorageBackend`（收编 cloud.py、本地实现）· `RetrievalEngine`（v1 用 FTS5、重模型留接口）· `get_current_principal` · `VisionProvider`（参考图视觉分类）· `ImageGenerationProvider`（生图）· TTS 接口 · 黑话词典资产化 · `POST /api/projects/{id}/agent-chat` 完整端点 · 数字网络 / 老板舱的数据模型字段。
+
+**OFF / 暂缓（本轮一律不碰，遇到一律留接缝）**：PostgreSQL · JWT / 多租户 · 对象存储 · 服务器 CORS · 外置扫描任务状态 · Chroma + BGE-M3 打进安装包 · 数字网络平台 UI/逻辑 · 老板驾驶舱 UI/逻辑 · 知识图谱可视化 · 自动生成全部方法库页面 · 个人训练界面 / 周报 / 17 模块完整后台（留个人 Obsidian、可索引，不进产品）· 前端全局状态管理重构（React Query / Zustand）。
+
+---
+
+## 3. 高风险红线（任何 Phase 都不得越过）
+
+- **归档**：可逆 / dry-run / 不原地移动（默认复制）/ 写入目标走 `validate_path` / 带 manifest + 一键撤销。
+- **转译**：对内研判版与对外纪要版分离 / 每条锚定转写原话 + 时间点 / AI 出草案、人工审定。
+- **数据库**：Alembic 迁移可回滚，**不裸跑 `ALTER TABLE`**。
+- **安全**：后端校验是边界，前端校验只是体验；`validate_path` = resolve → 白名单 `is_relative_to` → 拒绝 symlink 逃逸 → 空目录 fail closed。
+- **运行时 / 密钥**：见规则 9、10——技能能力内置、可离线独立运行；key 只进本机配置、永不进卡 / 仓库 / 同步文件；生图未配置 key 时提示配置、**绝不伪造图片结果**。
+
+---
+
+## 4. 风险：现在治 / 改到再治 / 别碰（来自 v1.1 风险再分级，仍有效）
+
+**现在治（Phase 0–1 必须完成）**
+- JSON 字段统一安全解析 + 写入校验（`content_json` / `dependencies` / `todos` / `mindmap_json` / `next_actions_json` / `sync_trace_json` / `skills` / `tags` 等）——杜绝一条脏数据崩页面。
+- Alembic 替代手工 `_ensure_sqlite_columns()` / `ALTER TABLE`。
+- SQLite WAL + 写操作收敛/串行化（后台长任务走写队列）+ 撞锁重试（`timeout=15`、指数退避 ≤3 次）。
+- `validate_path` 接入 `routes/knowledge.py` 的 6 个端点（scan / index-vault / index-vault/start / reindex / incremental / index）及一切写入/移动目标。
+
+**改到再治（用到该域时再动，别一次性大重构）**
+- 腾讯会议脚本路径加固（可配置 + 启动探测 + 超时 + 优雅降级 + 友好报错）——Phase 4 前置。
+- `services.py`（约 2914 行）按域拆分（解析 / 知识 / 会议 / 项目 / 收件箱 / 归档）——**改到哪个域才拆哪个域**。
+
+**别碰（OFF / 留接缝）**
+- PostgreSQL 迁移、JWT / 多租户、CORS 服务器化、对象存储、前端全局状态重构。
+- **两个纠偏**：① SQLite 并发锁**不许用「换 Postgres」来治**（用 WAL + 写串行 + 重试，那是桌面级低成本修法）；② 把「商用化约需 2-3 人月」这类结论从风险评估里摘出——它是平台叙事、会持续把优先级带偏服务器方向。
+
+---
+
+## 5. 工作方法 / 交付纪律（每个 Phase 都照这个走）
+
+**铁律（违反任一条就停下来问用户）**
+1. **一次只做当前 Phase**，不要「顺便」改别的。
+2. 动任何真实文件 / 数据库前，**先输出「改动计划」**：动哪些文件、为什么、风险是什么——等用户确认后再动手。
+3. 动真实文件 / 库的操作**必须可逆**（dry-run / 备份 / 可回滚迁移）。
+4. 不删构建、打包、迁移、演示代码；死代码只标 deprecated。
+5. 不擅自引入 PostgreSQL / 认证 / 多租户 / 服务器化——只留接口、不实现。
+6. 不为「完善」大范围重排目录结构；目录若需调整，**单独提案、单独确认**。
+7. **代码净精简**（归档废弃分支、拆巨型文件、删死代码）作为独立明确指令执行，删了什么、为什么安全要报告。
+
+**节奏**：`CLAUDE.md` 立规矩 → 逐 Phase 出计划 → 用户确认 → 执行 → 卡住验证标准 → 才进下一个。
+
+---
+
+## 6. 开发顺序（唯一权威 Phase 表 = v2）
+
+```
+Phase 0  立 CLAUDE.md + 收敛主线（ROM-AI-local-demo 唯一主线，其余分支移入 /archive 保留不删）
+         + 输出「现状 vs 纲要」差距清单 + 不动代码
+Phase 1  地基 / de-risk：validate_path + JSON 安全解析与写入校验 + Alembic 基线
+         + SQLite WAL + 写串行 + 撞锁重试 + Electron 文件夹选择
+         + 三接缝接口定义（StorageBackend / RetrievalEngine / get_current_principal，仅定义接口）
+Phase 2  收件箱一键归档（dry-run / manifest / 复制整理 / 可撤销）+ 归档即入库
+Phase 3  项目概览指挥台（壳，含最近会议纪要摘要段；类比项目先占位）
+Phase 4  会议纪要卡完整链路（五段式 + 诉求转译 + 种子词典 + 内外双版 + 播报稿
+         + 待办回流 + 腾讯脚本加固）
+Phase 5  AI 代理执行台：后端 Orchestrator + Skill Manifest + Executor Registry
+         + 不依赖检索的核心 Skill（任务书解读 / 任务拆解 / 技术重点 / 会议 / PPT / 概念 / 生图提示词）
+Phase 6  检索升级（ilike → FTS5/BM25）+ RAG 挂出处
+         + 回填检索依赖项（竞品分析 / 方案评审 / 类比项目 / 可复用资产）
+Phase 7  AI 生图 + 参考图分类闭环（huashu 默认、本地预置配置、未配则提示不伪造）
+         + 评估数字网络 / 老板舱 / 服务器化（暂缓 v2）
+```
+
+- **回流段贯穿 P2–P6**：每个产出模块把结果（经人工确认后）索引回知识库。
+- **功能价值优先级 ↔ 工程 Phase**：价值序是「收件箱 > 会议 > 文字三件套 > 概览 > 生图」；Phase 是依赖驱动的构建序。**地基（P0–1）永远在价值优先级之前**——「收件箱第一」不等于「跳过地基」。概览壳早建、价值待数据进来才兑现；若想让会议先行，P3 做会议、P4 做概览壳亦可。
+- **多 Skill 不自动串跑**：下游（PPT 大纲 → 概念文案 → 生图提示词 → AI 生图）做成成果卡上的「建议下一步」一键入口，由用户逐步触发，不从一句话跑完整条流水线。
+
+---
+
+## 7. 版本与冲突裁定（v1.1 vs v2，统一以 v2 为准）
+
+| 冲突点 | v1.1 说法 | v2 裁定（生效） |
+|---|---|---|
+| 检索引擎 | Phase 2 即上 Chroma + BM25 + BGE-M3 | v1 先用 SQLite **FTS5 / BM25** 替换 `ilike`；Chroma + BGE-M3 降为 **Phase 6 可选下载、不打进安装包** |
+| Phase 顺序 | 检索放 Phase 2（归档 / 概览 / 会议在后） | 检索 + RAG + AI 代理放 **Phase 5**；归档(P2)→概览壳(P3)→会议(P4) 在前 |
+| 检索接缝 | Phase 1 把 agent-system 的重模型接上 | Phase 1 **只定义** `RetrievalEngine` 接口；实现走 FTS5、重模型留接缝 |
+
+**v2 新增、v1.1 没有（一律生效）**：知识库为中枢的闭环 · 设计知识库三类 + 方法论底座《建筑方案前期认知系统》（taxonomy/schema/workflow、受控元数据、模板执行 vs 内容检索）· AI 代理 Skill 体系（核心规则「必须围绕当前项目」+ Orchestrator + Manifest + Executor Registry + 成果卡 + 边界「做任务、不看项目」）· 运行时独立 + 密钥边界（规则 9、10）· 功能价值优先级。
+
+**v1.1 仍有效、v2 未推翻（继续适用）**：三道接缝的具体定义 · 1.3 稳态加固清单 · 4.1 风险再分级与命令清单（已并入本文件第 4 节）· 收件箱归档可逆的全部细节 · 2.x 各模块字段。
+
+---
+
+_本文件随主线演进；任何 Phase 落地后若发现规格需调整，先改 v2 纲要、再同步本文件，不在代码里偷偷改规则。_

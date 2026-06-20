@@ -17,12 +17,24 @@ class Settings(BaseSettings):
     image_api_key: str = ""
     image_base_url: str = "https://api.openai.com/v1"
     image_model: str = "gpt-image-1"
+    image_output_dir: str = ""  # 生图输出目录，空则用项目目录下 assets/ai-generated/
     tencent_meeting_token: str = ""
+    tencent_meeting_script_path: str = ""  # 腾讯会议脚本路径，空则自动探测
+    meeting_script_timeout: int = 30  # 脚本执行超时(秒)
     default_vault_path: str = ""
     upload_root: str = str(BASE_DIR / "uploads")
     cloud_upload_enabled: bool = False
     cloud_upload_root: str = str(BASE_DIR / "cloud")
     database_url: str = "sqlite:///./data/rmo_ai.db"
+    data_dir: str = ""
+    authorized_dirs: list = []  # JSON 数组，用户动态添加的授权目录
+
+    # 音频转写配置
+    audio_provider: str = "whisper"  # whisper / tencent_cloud
+    whisper_api_key: str = ""  # 若为空则使用 deepseek_api_key
+    whisper_base_url: str = "https://api.openai.com/v1"
+    audio_max_size_mb: int = 100
+    audio_allowed_formats: str = ".wav,.mp3,.m4a,.ogg,.flac,.webm"  # 逗号分隔
 
     model_config = SettingsConfigDict(
         env_file=str(ENV_FILE),
@@ -45,8 +57,19 @@ class Settings(BaseSettings):
             return (BASE_DIR / path).resolve()
         return path.resolve()
 
+    @property
+    def data_dir_path(self) -> Path:
+        path = Path(self.data_dir) if self.data_dir else BASE_DIR
+        if not path.is_absolute():
+            return (BASE_DIR / path).resolve()
+        return path.resolve()
+
 
 settings = Settings()
+
+
+def get_settings() -> Settings:
+    return settings
 
 
 def write_env_value(key: str, value: str) -> None:

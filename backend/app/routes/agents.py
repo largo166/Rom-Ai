@@ -6,6 +6,7 @@ from sqlalchemy.orm import Session
 from app import crud, models, schemas
 from app.cloud import mirror_agent_run
 from app.database import get_db
+from app.json_safety import safe_json_dump
 
 router = APIRouter(prefix="/api/agents", tags=["agents"])
 
@@ -64,8 +65,8 @@ def run_agent(agent_id: str, payload: schemas.AgentRunRequest, db: Session = Dep
     run = models.AgentRun(
         project_id=project.id,
         agent_id=agent_id,
-        input_context=json.dumps({"goal": payload.goal}, ensure_ascii=False),
-        output_json=json.dumps(output, ensure_ascii=False),
+        input_context=safe_json_dump({"goal": payload.goal}, field_name="agent_input_context"),
+        output_json=safe_json_dump(output, field_name="agent_output_json"),
         status="succeeded",
     )
     db.add(run)

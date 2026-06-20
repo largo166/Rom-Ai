@@ -9,7 +9,7 @@ $Root = Split-Path -Parent $PSScriptRoot
 $Frontend = Join-Path $Root "frontend"
 $Backend = Join-Path $Root "backend"
 $Desktop = Join-Path $Root "desktop"
-$BackendDist = Join-Path $Root "backend_dist"
+$BackendDist = Join-Path $Backend "dist"
 $Release = Join-Path $Root "release"
 
 function Step($Message) {
@@ -98,14 +98,14 @@ if (Test-Path $Release) {
 Step "Building backend executable"
 Push-Location $Backend
 .\.venv-win\Scripts\python.exe -m PyInstaller `
-  rom-ai-backend.spec `
+  rom_ai.spec `
   --noconfirm `
   --clean `
   --distpath $BackendDist `
   --workpath (Join-Path $Backend "build")
 Pop-Location
 
-$BackendExe = Join-Path $BackendDist "rom-ai-backend\rom-ai-backend.exe"
+$BackendExe = Join-Path $BackendDist "rmo-ai-backend\rmo-ai-backend.exe"
 if (-not (Test-Path $BackendExe)) {
   throw "Backend executable was not created: $BackendExe"
 }

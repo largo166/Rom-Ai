@@ -4,8 +4,19 @@ from app.cloud import cloud_enabled, cloud_root_path
 from app.config import BASE_DIR, ENV_FILE, LOG_DIR, settings, write_env_value
 from app.schemas import DeepSeekSettingsUpdate, HealthOut, SettingsStatusOut, TencentMeetingSettingsUpdate
 from app.services import list_deepseek_models
+from app.utils import utc_now
 
 router = APIRouter()
+
+
+@router.get("/health", response_model=HealthOut)
+def health_root():
+    return {
+        "status": "ok",
+        "service": "rmo-ai-backend",
+        "database": "sqlite",
+        "timestamp": utc_now().isoformat(),
+    }
 
 
 @router.get("/api/health", response_model=HealthOut)
@@ -14,6 +25,7 @@ def health():
         "status": "ok",
         "service": "rmo-ai-backend",
         "database": "sqlite",
+        "timestamp": utc_now().isoformat(),
     }
 
 
@@ -71,3 +83,11 @@ async def deepseek_models():
         return {"models": await list_deepseek_models()}
     except Exception as exc:
         raise HTTPException(status_code=502, detail=f"拉取 DeepSeek 模型失败：{exc}") from exc
+
+
+@router.get("/api/meeting-script-status")
+async def get_meeting_script_status():
+    """探测腾讯会议脚本是否可用"""
+    from app.meeting_integration import discover_meeting_script
+    status = discover_meeting_script(settings.tencent_meeting_script_path)
+    return status.to_dict()

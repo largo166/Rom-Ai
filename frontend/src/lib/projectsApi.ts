@@ -10,6 +10,12 @@ export type Project = {
   phase: string;
   description: string;
   status: string;
+  client_name?: string | null;
+  client_contact?: string | null;
+  client_demands?: string | null;
+  milestones?: string | null;
+  deliverables?: string | null;
+  risk_summary?: string | null;
   created_at: string;
   updated_at: string;
 };
@@ -521,6 +527,30 @@ export type InboxBatchAdvice = {
   mode: string;
 };
 
+export type BatchArchiveFileAction = {
+  id: string;
+  original_name: string;
+  new_name: string;
+  target_path: string;
+  project: string;
+  file_type: string;
+  action: 'move_rename' | 'copy' | 'skip';
+  will_format: boolean;
+};
+
+export type BatchArchivePlanGroup = {
+  project: string;
+  file_count: number;
+  files: BatchArchiveFileAction[];
+};
+
+export type BatchArchivePlanResponse = {
+  summary: string;
+  total_files: number;
+  groups: BatchArchivePlanGroup[];
+  naming_conflicts: string[];
+};
+
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(`${apiBase()}${path}`, {
     headers: {
@@ -639,6 +669,13 @@ export function applyInbox(payload: InboxApplyPayload) {
   return request<{ project: Project; files: ProjectFile[]; items: InboxItem[] }>('/api/inbox/apply', {
     method: 'POST',
     body: JSON.stringify(payload),
+  });
+}
+
+export function generateBatchArchivePlan(params: { item_ids?: string[]; naming_template?: string; format_markdown?: boolean } = {}) {
+  return request<BatchArchivePlanResponse>('/api/inbox/archive/batch-plan', {
+    method: 'POST',
+    body: JSON.stringify(params),
   });
 }
 
@@ -996,6 +1033,312 @@ export function updateNetworkHumanMember(memberId: string, payload: { name?: str
   });
 }
 
+// ── Phase 3: 项目概览指挥台 ────────────────────────────────────────────────────
+
+export type OverviewMetrics = {
+  files_count: number;
+  meetings_count: number;
+  tasks_total: number;
+  tasks_done: number;
+  risks_count: number;
+  deliverables_gap: number;
+};
+
+export type OverviewAnalysis = {
+  report_id: string;
+  report_type: string;
+  mode: string;
+  model_name: string;
+  created_at: string;
+  project_basis: string;
+  design_difficulties: unknown[];
+  project_summary: Record<string, unknown>;
+  risk_list: unknown[];
+  open_questions: unknown[];
+  technical_focus_cards: unknown[];
+  next_actions: unknown[];
+} | null;
+
+export type OverviewMeetingBrief = {
+  id: string;
+  title: string;
+  date: string | null;
+  summary: string;
+  status: string;
+  created_at: string;
+} | null;
+
+export type OverviewNextAction = {
+  id: string;
+  task_name: string;
+  task_type: string;
+  priority: string;
+  owner_role: string;
+  estimated_days: number;
+  risk_level: string;
+  status: string;
+  assignee_name: string;
+  due_date: string | null;
+  created_at: string;
+};
+
+export type OverviewMilestone = {
+  name?: string;
+  date?: string;
+  status?: string;
+  [key: string]: unknown;
+};
+
+export type OverviewRisk = {
+  source: string;
+  level: string;
+  title: string;
+  detail: string;
+  ref_id: string;
+};
+
+export type OverviewDashboardData = {
+  project: Project;
+  metrics: OverviewMetrics;
+  analysis: OverviewAnalysis;
+  recent_meeting: OverviewMeetingBrief;
+  next_actions: OverviewNextAction[];
+  milestones: OverviewMilestone[];
+  risks: OverviewRisk[];
+  reusable_assets: unknown[];
+};
+
+export function getOverviewDashboard(projectId: string) {
+  return request<OverviewDashboardData>(`/api/projects/${projectId}/overview-dashboard`);
+}
+
+export function updateProjectClient(
+  projectId: string,
+  payload: { client_name?: string; client_contact?: string; client_demands?: string },
+) {
+  return request<Project>(`/api/projects/${projectId}/client`, {
+    method: 'PATCH',
+    body: JSON.stringify(payload),
+  });
+}
+
+export function updateProjectMilestones(
+  projectId: string,
+  milestones: Array<Record<string, unknown>>,
+) {
+  return request<Array<Record<string, unknown>>>(`/api/projects/${projectId}/milestones`, {
+    method: 'PATCH',
+    body: JSON.stringify({ milestones }),
+  });
+}
+
 export function getNetworkMemberWorkload(memberType: 'human' | 'digital_employee', memberId: string) {
   return request<NetworkMemberWorkload>(`/api/network/members/${memberType}/${memberId}/workload`);
+}
+
+export type MeetingMinutesTranslation = {
+  original: string;
+  timestamp: string;
+  jargon_matched?: string;
+  translation: string[];
+  confidence: number;
+  source: string;
+  source_quote: string;
+};
+
+export type MeetingMinutesContent = {
+  meeting_content: string;
+  key_items: Array<{ item: string; priority: string; owner: string }>;
+  client_translation: MeetingMinutesTranslation[];
+  decisions: Array<{ decision: string; responsible: string; deadline: string }>;
+  action_items: Array<{ task: string; assignee: string; due_date: string; priority: string }>;
+  metadata: { generated_at: string; version: number; status: string; is_internal: boolean };
+};
+
+export type MeetingMinutesResult = {
+  minutes: MeetingMinutesContent;
+  internal_version: MeetingMinutesContent;
+  external_version: Omit<MeetingMinutesContent, 'client_translation'>;
+  broadcast_script: string;
+  rule_translations: MeetingMinutesTranslation[];
+  status: string;
+};
+
+export type MeetingScriptStatus = {
+  available: boolean;
+  script_path: string | null;
+  error_message: string;
+};
+
+export type AudioUploadResult = {
+  message: string;
+  audio_path: string;
+  size_mb: number;
+};
+
+export type TranscribeResult = {
+  message: string;
+  transcript: string;
+  duration_seconds: number;
+  source: string;
+  segment_count: number;
+};
+
+export type PasteTranscriptResult = {
+  message: string;
+  cleaned_text: string;
+  original_length: number;
+  cleaned_length: number;
+};
+
+export type MeetingRefluxSummary = {
+  demands_added: number;
+  risks_added: number;
+  tasks_created: number;
+  okf_stale_cards?: Array<{ id?: string; title?: string; card_type?: string }>;
+};
+
+export type ConfirmMinutesResult = {
+  success: boolean;
+  message: string;
+  reflux_summary: MeetingRefluxSummary;
+};
+
+export type CommunicationType = 'phone' | 'wechat' | 'email' | 'onsite' | 'verbal';
+
+export type CommunicationPayload = {
+  communication_type: CommunicationType;
+  title?: string;
+  participants?: string;
+  content: string;
+  occurred_at?: string;
+};
+
+export type CommunicationResult = {
+  meeting: ProjectMeeting;
+  minutes: MeetingMinutesContent;
+  internal_version: MeetingMinutesContent;
+  external_version: Omit<MeetingMinutesContent, 'client_translation'>;
+  broadcast_script: string;
+  rule_translations: MeetingMinutesTranslation[];
+};
+
+export type AnalysisFreshness = {
+  is_stale: boolean;
+  unconsumed_count: number;
+  last_analysis_date: string | null;
+  unconsumed_event_types: string[];
+};
+
+export type IncrementalAnalysisResult = {
+  success: boolean;
+  message?: string;
+  report_id?: string;
+};
+
+export function generateMeetingMinutes(projectId: string, transcript: string) {
+  return request<MeetingMinutesResult>(`/api/projects/${projectId}/meetings/generate-minutes`, {
+    method: 'POST',
+    body: JSON.stringify({ transcript }),
+  });
+}
+
+export function uploadMeetingAudio(projectId: string, meetingId: string, file: File) {
+  const form = new FormData();
+  form.append('file', file);
+  return fetch(`${apiBase()}/api/projects/${projectId}/meetings/${meetingId}/upload-audio`, {
+    method: 'POST',
+    body: form,
+  }).then(async (res) => {
+    if (!res.ok) {
+      const data = await res.json().catch(() => null);
+      throw new Error(data?.detail || (await res.text()));
+    }
+    return res.json() as Promise<AudioUploadResult>;
+  });
+}
+
+export function transcribeMeetingAudio(projectId: string, meetingId: string) {
+  return request<TranscribeResult>(`/api/projects/${projectId}/meetings/${meetingId}/transcribe`, {
+    method: 'POST',
+  });
+}
+
+export function pasteMeetingTranscript(projectId: string, meetingId: string, text: string) {
+  return request<PasteTranscriptResult>(
+    `/api/projects/${projectId}/meetings/${meetingId}/paste-transcript`,
+    {
+      method: 'POST',
+      body: JSON.stringify({ text }),
+    },
+  );
+}
+
+export function confirmMeetingMinutes(
+  projectId: string,
+  meetingId: string,
+  minutes: MeetingMinutesContent,
+) {
+  return request<ConfirmMinutesResult>(
+    `/api/projects/${projectId}/meetings/${meetingId}/confirm-minutes`,
+    {
+      method: 'POST',
+      body: JSON.stringify({ minutes }),
+    },
+  );
+}
+
+export function getAnalysisFreshness(projectId: string) {
+  return request<AnalysisFreshness>(`/api/projects/${projectId}/analysis-freshness`);
+}
+
+export function runIncrementalAnalysis(projectId: string) {
+  return request<IncrementalAnalysisResult>(`/api/projects/${projectId}/incremental-analysis`, {
+    method: 'POST',
+  });
+}
+
+export function getMeetingScriptStatus() {
+  return request<MeetingScriptStatus>('/api/meeting-script-status');
+}
+
+// ── 块7: 知识推荐 ────────────────────────────────────────────────────────────
+
+export async function fetchRecommendations(
+  projectId: string,
+  trigger: string,
+  options?: { transcript_text?: string; card_type?: string; file_names?: string; limit?: number },
+): Promise<{
+  trigger: string;
+  recommendations: Array<{
+    title: string;
+    content_preview: string;
+    source_type: string;
+    source_id: string;
+    source_path: string;
+    hit_reason: string;
+    relevance_score: number;
+  }>;
+  query_keywords: string[];
+  generated_at: string;
+}> {
+  try {
+    const params = new URLSearchParams({ trigger });
+    if (options?.transcript_text) params.set('transcript_text', options.transcript_text);
+    if (options?.card_type) params.set('card_type', options.card_type);
+    if (options?.file_names) params.set('file_names', options.file_names);
+    if (options?.limit) params.set('limit', String(options.limit));
+    const res = await fetch(`${apiBase()}/api/projects/${projectId}/recommendations?${params}`);
+    if (!res.ok) return { trigger, recommendations: [], query_keywords: [], generated_at: '' };
+    return res.json();
+  } catch {
+    return { trigger, recommendations: [], query_keywords: [], generated_at: '' };
+  }
+}
+
+export function createCommunication(projectId: string, payload: CommunicationPayload) {
+  return request<CommunicationResult>(`/api/projects/${projectId}/communications`, {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  });
 }

@@ -11,6 +11,7 @@ import app.services as services
 from app.services import (
     build_startup_analysis_prompt,
     build_project_execution_prompt,
+    build_standard_frontmatter,
     classify_project_execution_instruction,
     build_tencent_records_query,
     deposit_startup_analysis_to_knowledge,
@@ -25,7 +26,9 @@ from app.services import (
     scan_vault_directory,
     list_knowledge_files,
     search_knowledge,
+    _migrate_old_deposit_paths,
 )
+from app.context_schema import ContextType, TYPE_ALIASES, STANDARD_FRONTMATTER_FIELDS
 from app.database import Base
 
 
@@ -220,7 +223,7 @@ class KnowledgeIndexResultTest(unittest.TestCase):
 
             self.assertTrue(chunks)
             self.assertTrue(any("日照退界复核" in chunk.content for chunk in chunks))
-            self.assertTrue(any("project-deposits" in chunk.path for chunk in chunks))
+            self.assertTrue(any("project-context" in chunk.path for chunk in chunks))
         finally:
             db.close()
 
@@ -383,6 +386,129 @@ class TencentMeetingResultTest(unittest.TestCase):
         finally:
             services.call_tencent_meeting_tool = original_call
             db.close()
+
+
+class ContextSchemaTest(unittest.TestCase):
+    """验证上下文包 schema 结构完整性"""
+
+    def open_temp_db(self):
+        engine = create_engine("sqlite:///:memory:", connect_args={"check_same_thread": False})
+        Base.metadata.create_all(bind=engine)
+        return sessionmaker(autocommit=False, autoflush=False, bind=engine)()
+
+    def test_frontmatter_contains_all_7_standard_fields(self):
+        result = build_standard_frontmatter(
+            ContextType.project_context,
+            "测试标题",
+            "测试描述",
+            "proj-001",
+            ["tag1", "tag2"],
+        )
+        for field in STANDARD_FRONTMATTER_FIELDS:
+            self.assertIn(f"{field}:", result, f"frontmatter 缺少字段: {field}")
+
+    def test_context_type_enum_contains_required_values(self):
+        required_values = ["project_context", "meeting_summary", "meeting_transcript"]
+        enum_values = [e.value for e in ContextType]
+        for val in required_values:
+            self.assertIn(val, enum_values, f"ContextType 缺少枚举值: {val}")
+
+    def test_deposit_filepath_starts_with_project_context_prefix(self):
+        db = self.open_temp_db()
+        try:
+            project = models.Project(name="路径测试", city="上海", project_type="住宅", phase="方案")
+            db.add(project)
+            db.commit()
+            payload = {
+                "project_summary": {"summary": "测试摘要"},
+                "technical_focus_cards": [],
+                "task_breakdown": [],
+                "risk_list": [],
+                "open_questions": [],
+                "source_refs": [],
+            }
+            record = deposit_startup_analysis_to_knowledge(db, project, payload, "rpt-001")
+            self.assertTrue(
+                record.filepath.startswith("project-context/"),
+                f"filepath 应以 project-context/ 开头，实际为: {record.filepath}",
+            )
+        finally:
+            db.close()
+
+    def test_deposit_creates_log_md(self):
+        db = self.open_temp_db()
+        try:
+            project = models.Project(name="日志测试", city="北京", project_type="办公", phase="施工图")
+            db.add(project)
+            db.commit()
+            payload = {
+                "project_summary": {"summary": "测试日志"},
+                "technical_focus_cards": [],
+                "task_breakdown": [],
+                "risk_list": [],
+                "open_questions": [],
+                "source_refs": [],
+            }
+            deposit_startup_analysis_to_knowledge(db, project, payload, "rpt-002")
+            log_path = f"project-context/{project.id}/log.md"
+            log_file = db.query(models.KnowledgeFile).filter_by(filepath=log_path).first()
+            self.assertIsNotNone(log_file, f"知识库中应存在 {log_path}")
+        finally:
+            db.close()
+
+    def test_deposit_creates_index_md(self):
+        db = self.open_temp_db()
+        try:
+            project = models.Project(name="索引测试", city="深圳", project_type="商业", phase="概念")
+            db.add(project)
+            db.commit()
+            payload = {
+                "project_summary": {"summary": "测试索引"},
+                "technical_focus_cards": [],
+                "task_breakdown": [],
+                "risk_list": [],
+                "open_questions": [],
+                "source_refs": [],
+            }
+            deposit_startup_analysis_to_knowledge(db, project, payload, "rpt-003")
+            index_path = f"project-context/{project.id}/index.md"
+            index_file = db.query(models.KnowledgeFile).filter_by(filepath=index_path).first()
+            self.assertIsNotNone(index_file, f"知识库中应存在 {index_path}")
+        finally:
+            db.close()
+
+    def test_migrate_old_deposit_paths_renames_prefix(self):
+        db = self.open_temp_db()
+        try:
+            project = models.Project(name="迁移测试", city="广州", project_type="住宅", phase="方案")
+            db.add(project)
+            db.commit()
+            # 插入旧路径记录
+            old_path = f"project-deposits/{project.id}/startup-analysis.md"
+            old_file = models.KnowledgeFile(filepath=old_path, filename="startup-analysis.md", filetype="md")
+            db.add(old_file)
+            db.commit()
+            # 执行迁移
+            _migrate_old_deposit_paths(db, project.id)
+            db.commit()
+            # 验证旧路径不再存在
+            remaining_old = db.query(models.KnowledgeFile).filter_by(filepath=old_path).first()
+            self.assertIsNone(remaining_old, "迁移后旧路径不应存在")
+            # 验证新路径存在
+            new_path = f"project-context/{project.id}/startup-analysis.md"
+            new_file = db.query(models.KnowledgeFile).filter_by(filepath=new_path).first()
+            self.assertIsNotNone(new_file, "迁移后新路径应存在")
+        finally:
+            db.close()
+
+    def test_type_aliases_map_old_names_to_new_enum(self):
+        self.assertIn("project_deposit", TYPE_ALIASES)
+        self.assertEqual(TYPE_ALIASES["project_deposit"], ContextType.project_context)
+        self.assertIn("method_template", TYPE_ALIASES)
+        self.assertEqual(TYPE_ALIASES["method_template"], ContextType.method)
+        # 每个 alias 的值都是有效的 ContextType
+        for alias_name, enum_val in TYPE_ALIASES.items():
+            self.assertIsInstance(enum_val, ContextType, f"TYPE_ALIASES[{alias_name}] 应为 ContextType")
 
 
 if __name__ == "__main__":

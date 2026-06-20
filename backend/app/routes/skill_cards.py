@@ -1,6 +1,5 @@
 # -*- coding: utf-8 -*-
 import json
-from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import select
@@ -9,8 +8,10 @@ from sqlalchemy.orm import Session
 from app import crud, models, schemas
 from app.config import settings
 from app.database import get_db
+from app.json_safety import safe_json_parse, safe_json_dump
 from app.mock_data import MOCK_TASK_BREAKDOWN, MOCK_PPT_STRUCTURE, MOCK_TECH_POINTS, MOCK_MEETING_MINUTES
 from app.services import call_deepseek_text
+from app.utils import utc_now
 
 router = APIRouter(prefix="/api/projects/{project_id}/skill-cards", tags=["skill-cards"])
 
@@ -94,13 +95,13 @@ async def execute_skill_card(project_id: str, card_id: str, db: Session = Depend
             )
             import re
             match = re.search(r"\{.*\}|\[.*\]", raw, re.S)
-            output = json.loads(match.group(0)) if match else mock_output
+            output = safe_json_parse(match.group(0), default=mock_output, field_name="skill_card_output") if match else mock_output
         except Exception:
             output = mock_output
 
-    card.output_data = json.dumps(output, ensure_ascii=False)
+    card.output_data = safe_json_dump(output, field_name="skill_card_output_data")
     card.status = "completed"
-    card.completed_at = datetime.utcnow()
+    card.completed_at = utc_now()
     db.commit()
     db.refresh(card)
     return {"card_id": card.id, "output": output, "status": "completed"}

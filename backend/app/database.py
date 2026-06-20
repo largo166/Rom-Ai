@@ -1,12 +1,62 @@
+import logging
 import shutil
+import threading
+import time
+from contextlib import contextmanager
 from datetime import datetime
+from functools import wraps
 from pathlib import Path
 from typing import Optional
 
 from sqlalchemy import create_engine
+from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import DeclarativeBase, sessionmaker
 
 from app.config import BASE_DIR, settings
+
+logger = logging.getLogger(__name__)
+
+# ──────────────────────────────────────────────
+# 写操作串行化锁（防止后台任务与前台竞争写锁）
+# ──────────────────────────────────────────────
+_write_lock = threading.Lock()
+
+
+@contextmanager
+def serialized_write():
+    """串行化写操作，防止后台任务与前台竞争写锁"""
+    _write_lock.acquire()
+    try:
+        yield
+    finally:
+        _write_lock.release()
+
+
+def retry_on_lock(max_retries: int = 3, base_delay: float = 0.1):
+    """
+    SQLite 锁冲突时指数退避重试装饰器。
+    用于后台长任务（扫描/索引/分析）中的 DB 写操作。
+    """
+    def decorator(func):
+        @wraps(func)
+        def wrapper(*args, **kwargs):
+            for attempt in range(max_retries + 1):
+                try:
+                    return func(*args, **kwargs)
+                except OperationalError as e:
+                    if "database is locked" in str(e) and attempt < max_retries:
+                        delay = base_delay * (2 ** attempt)
+                        logger.warning(
+                            "DB locked, retry %d/%d after %.1fs",
+                            attempt + 1,
+                            max_retries,
+                            delay,
+                        )
+                        time.sleep(delay)
+                    else:
+                        raise
+        return wrapper
+    return decorator
 
 
 def _sqlite_path_from_url(url: str) -> Optional[Path]:
@@ -47,7 +97,33 @@ def init_db() -> None:
 
     Base.metadata.create_all(bind=engine)
     _configure_sqlite()
-    _ensure_sqlite_columns()
+    _run_alembic_upgrade()
+    # _ensure_sqlite_columns()  # 已被 Alembic 迁移替代，保留函数体供回滚参考
+
+    # Phase 6: 初始化 SQLite FTS5 全文索引
+    try:
+        from app.retrieval import init_fts5
+
+        init_fts5(engine)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("FTS5 initialization failed (non-fatal): %s", exc)
+
+
+def _run_alembic_upgrade() -> None:
+    """如果存在 pending 迁移则自动执行 alembic upgrade head"""
+    try:
+        from alembic import command
+        from alembic.config import Config
+
+        alembic_ini = BASE_DIR.parent / "alembic.ini"
+        if not alembic_ini.exists():
+            logger.debug("alembic.ini not found, skipping auto-upgrade")
+            return
+        alembic_cfg = Config(str(alembic_ini))
+        command.upgrade(alembic_cfg, "head")
+        logger.info("Alembic upgrade head completed")
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Alembic auto-upgrade failed (non-fatal): %s", exc)
 
 
 def _configure_sqlite() -> None:
@@ -55,7 +131,7 @@ def _configure_sqlite() -> None:
         return
     with engine.begin() as conn:
         conn.exec_driver_sql("PRAGMA journal_mode=WAL")
-        conn.exec_driver_sql("PRAGMA busy_timeout=5000")
+        conn.exec_driver_sql("PRAGMA busy_timeout=15000")  # 提升到 15 秒，减少锁超时概率
         conn.exec_driver_sql("PRAGMA foreign_keys=ON")
 
 

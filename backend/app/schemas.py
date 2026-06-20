@@ -168,6 +168,12 @@ class ProjectOut(BaseModel):
     phase: str
     description: str
     status: str
+    client_name: Optional[str] = None
+    client_contact: Optional[str] = None
+    client_demands: Optional[str] = None
+    milestones: Optional[str] = None
+    deliverables: Optional[str] = None
+    risk_summary: Optional[str] = None
     created_at: datetime
     updated_at: datetime
 
@@ -404,6 +410,27 @@ class ProjectMeetingOut(BaseModel):
     updated_at: datetime
 
 
+class CommunicationCreate(BaseModel):
+    """沟通记录轻量入口创建请求"""
+
+    communication_type: str = Field(min_length=1, max_length=20)
+    title: str = ""
+    participants: str = ""
+    content: str = Field(min_length=1, max_length=50000)
+    occurred_at: str = ""
+
+
+class CommunicationOut(BaseModel):
+    """沟通记录创建响应"""
+
+    meeting: ProjectMeetingOut
+    minutes: dict[str, Any]
+    internal_version: dict[str, Any]
+    external_version: dict[str, Any]
+    broadcast_script: str
+    rule_translations: list[dict[str, Any]]
+
+
 class SkillCardRunRequest(BaseModel):
     card_type: str = "task_breakdown"
     prompt: str = ""
@@ -512,6 +539,7 @@ class HealthOut(BaseModel):
     status: str
     service: str
     database: str
+    timestamp: Optional[str] = None
 
 
 class SettingsStatusOut(BaseModel):
@@ -686,3 +714,49 @@ class ObsidianCandidateCreate(BaseModel):
     title: str = ""
     content: str = ""
     tags: list[str] = []
+
+
+# ── Phase 3: 项目概览指挥台 ──────────────────────────────────────────────────
+
+class ClientUpdate(BaseModel):
+    """更新甲方/客户信息"""
+    client_name: Optional[str] = None
+    client_contact: Optional[str] = None
+    client_demands: Optional[str] = None
+
+
+class MilestonesUpdate(BaseModel):
+    """更新里程碑列表"""
+    milestones: list[dict[str, Any]] = []
+
+
+# ── 批量归档方案 ──────────────────────────────────────────────────────────────
+
+class BatchArchivePlanRequest(BaseModel):
+    item_ids: list[str] = []  # 空=全部待归档项
+    naming_template: str = ""  # 可选自定义模板
+    format_markdown: bool = True  # 是否格式化MD文件
+
+
+class BatchArchiveFileAction(BaseModel):
+    id: str
+    original_name: str
+    new_name: str
+    target_path: str
+    project: str
+    file_type: str
+    action: str  # "move_rename" | "copy" | "skip"
+    will_format: bool = False  # 是否会格式化
+
+
+class BatchArchivePlanGroup(BaseModel):
+    project: str
+    file_count: int
+    files: list[BatchArchiveFileAction]
+
+
+class BatchArchivePlanResponse(BaseModel):
+    summary: str  # AI 生成的整体方案摘要
+    total_files: int
+    groups: list[BatchArchivePlanGroup]
+    naming_conflicts: list = []

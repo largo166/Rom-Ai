@@ -8,6 +8,7 @@ from sqlalchemy.orm import Session
 from app import crud, models
 from app.config import settings
 from app.database import get_db
+from app.json_safety import safe_json_parse
 from app.mock_data import MOCK_TECH_POINTS
 from app.services import call_deepseek_text
 
@@ -39,7 +40,7 @@ async def generate_tech_points(project_id: str, db: Session = Depends(get_db)):
         )
         import re
         match = re.search(r"\[.*\]", raw, re.S)
-        tech_points = json.loads(match.group(0)) if match else MOCK_TECH_POINTS
+        tech_points = safe_json_parse(match.group(0), default=MOCK_TECH_POINTS, field_name="tech_points_json") if match else MOCK_TECH_POINTS
     except Exception:
         tech_points = MOCK_TECH_POINTS
 

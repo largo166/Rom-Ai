@@ -8,12 +8,15 @@ from threading import Thread
 from typing import Optional
 from uuid import uuid4
 
-from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, File, HTTPException, Request, UploadFile
+from fastapi.responses import JSONResponse
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app import models, schemas
-from app.database import get_db
+from app.config import settings
+from app.database import get_db, serialized_write
+from app.utils import utc_now_iso
 from app.services import (
     SUPPORTED_INBOX_EXTS,
     apply_inbox_recommendations,
@@ -139,7 +142,7 @@ def _run_scan_job(job_id: str, payload: schemas.InboxScanRequest) -> None:
         job["step"] = "失败"
         job["error"] = str(exc)
     finally:
-        job["updated_at"] = datetime.utcnow().isoformat()
+        job["updated_at"] = utc_now_iso()
         db.close()
 
 
@@ -149,7 +152,7 @@ def start_scan_inbox(payload: schemas.InboxScanRequest):
     if not root.exists() or not root.is_dir():
         raise HTTPException(status_code=404, detail=f"目录不存在：{root}")
     job_id = uuid4().hex
-    now = datetime.utcnow().isoformat()
+    now = utc_now_iso()
     SCAN_JOBS[job_id] = {
         "job_id": job_id,
         "status": "queued",
@@ -192,7 +195,7 @@ async def start_local_organize(payload: schemas.LocalOrganizeStartRequest, db: S
     except Exception as exc:
         raise HTTPException(status_code=400, detail=f"生成本地整理方案失败：{exc}") from exc
     job_id = uuid4().hex
-    now = datetime.utcnow().isoformat()
+    now = utc_now_iso()
     output_root = root.parent / f"{root.name}_RMO整理_{datetime.now().strftime('%Y%m%d-%H%M')}"
     job = {
         "job_id": job_id,
@@ -235,7 +238,7 @@ def apply_local_organize(payload: schemas.LocalOrganizeApplyRequest, db: Session
             "job_id": payload.job_id,
             "source_root": job["path"],
             "output_root": str(output_root),
-            "created_at": datetime.utcnow().isoformat(),
+            "created_at": utc_now_iso(),
             "copied_count": len(result["files"]),
             "skipped_count": result["skipped_count"],
             "created_project_count": result["created_project_count"],
@@ -272,10 +275,10 @@ def apply_local_organize(payload: schemas.LocalOrganizeApplyRequest, db: Session
             "output_root": str(output_root),
             "manifest_path": str(manifest_md),
             "result": manifest,
-            "updated_at": datetime.utcnow().isoformat(),
+            "updated_at": utc_now_iso(),
         })
     except Exception as exc:
-        job.update({"status": "failed", "error": str(exc), "updated_at": datetime.utcnow().isoformat()})
+        job.update({"status": "failed", "error": str(exc), "updated_at": utc_now_iso()})
         raise HTTPException(status_code=400, detail=f"执行本地整理失败：{exc}") from exc
     return job
 
@@ -342,3 +345,212 @@ def apply_inbox(payload: schemas.InboxApplyRequest, db: Session = Depends(get_db
 @router.post("/apply-recommendations", response_model=schemas.InboxRecommendationApplyOut)
 def apply_recommendations(payload: schemas.InboxApplyRecommendationsRequest, db: Session = Depends(get_db)):
     return apply_inbox_recommendations(db, payload.item_ids, payload.force_duplicate_ids)
+
+
+# === 一键归档功能 ===
+
+@router.post("/archive/batch-plan")
+def archive_batch_plan(payload: schemas.BatchArchivePlanRequest, db: Session = Depends(get_db)):
+    """生成批量归档整体方案"""
+    from app.services.inbox import generate_batch_archive_plan
+    result = generate_batch_archive_plan(
+        db,
+        item_ids=payload.item_ids or None,
+        naming_template=payload.naming_template,
+        format_markdown=payload.format_markdown,
+    )
+    return result
+
+
+@router.post("/archive/scan")
+async def archive_scan_folder(request: Request, db: Session = Depends(get_db)):
+    """扫描指定文件夹，返回文件列表和规则分类结果"""
+    from app.security import validate_path, get_allowed_roots, PathValidationError
+    from app.archive_engine import ArchiveEngine
+
+    body = await request.json()
+    folder_path = body.get("folder_path", "")
+
+    try:
+        validated = validate_path(folder_path, allowed_bases=get_allowed_roots(), must_exist=True)
+        if not validated.is_dir():
+            return JSONResponse({"error": "路径不是目录"}, status_code=400)
+    except PathValidationError as e:
+        return JSONResponse({"error": str(e)}, status_code=400)
+
+    engine = ArchiveEngine(data_dir=settings.data_dir_path)
+    scanned = engine.scan_folder(validated)
+    classifications = engine.classify_by_rules(scanned)
+
+    return {
+        "folder": str(validated),
+        "total_files": len(scanned),
+        "files": [
+            {**scan, **cls}
+            for scan, cls in zip(scanned, classifications)
+        ],
+        "needs_ai_count": sum(1 for c in classifications if c.get("needs_ai")),
+        "high_confidence_count": sum(1 for c in classifications if c.get("confidence", 0) >= 0.6)
+    }
+
+
+@router.post("/archive/plan")
+async def archive_generate_plan(request: Request, db: Session = Depends(get_db)):
+    """生成归档方案（dry-run，不动文件）"""
+    from app.security import validate_path, PathValidationError
+    from app.archive_engine import ArchiveEngine, ArchivePlan
+
+    body = await request.json()
+    source_folder = body.get("source_folder", "")
+    target_base = body.get("target_base", "")
+    classifications = body.get("classifications", [])
+    scanned_files = body.get("scanned_files", [])
+    naming_template = body.get("naming_template", "{city}-{project}-{stage}-{doc_type}-{version}-{date}")
+
+    try:
+        validate_path(source_folder, allowed_bases=get_allowed_roots(), must_exist=True)
+        validate_path(target_base, allowed_bases=get_allowed_roots())
+    except PathValidationError as e:
+        return JSONResponse({"error": str(e)}, status_code=400)
+
+    engine = ArchiveEngine(data_dir=settings.data_dir_path)
+    plan = engine.generate_plan(source_folder, target_base, scanned_files, classifications, naming_template)
+
+    # dry-run 验证
+    manifest = engine.execute_plan(plan, dry_run=True)
+
+    return {
+        "plan_id": plan.plan_id,
+        "total_files": plan.total_files,
+        "skipped_duplicates": plan.skipped_files,
+        "conflicts": sum(1 for item in plan.items if item.status == "conflict"),
+        "ready": sum(1 for item in plan.items if item.status == "ready"),
+        "items": [
+            {
+                "source": item.source_path,
+                "target": item.target_path,
+                "type": item.file_type,
+                "category": item.category,
+                "confidence": item.confidence,
+                "reason": item.reason,
+                "status": item.status,
+                "is_duplicate": item.is_duplicate,
+            }
+            for item in plan.items
+        ]
+    }
+
+
+@router.post("/archive/execute")
+async def archive_execute_plan(request: Request, db: Session = Depends(get_db)):
+    """确认执行归档方案（复制文件到新结构）"""
+    from app.security import validate_path, PathValidationError
+    from app.archive_engine import ArchiveEngine, ArchivePlan, ArchiveItem
+
+    body = await request.json()
+    plan_data = body.get("plan", {})
+
+    if not plan_data:
+        return JSONResponse({"error": "缺少归档方案"}, status_code=400)
+
+    try:
+        validate_path(
+            plan_data.get("source_folder", ""),
+            allowed_bases=get_allowed_roots(),
+            must_exist=True,
+        )
+        validate_path(
+            plan_data.get("target_base", ""),
+            allowed_bases=get_allowed_roots(),
+        )
+    except PathValidationError as e:
+        return JSONResponse({"error": str(e)}, status_code=400)
+
+    # 重建 plan 对象
+    engine = ArchiveEngine(data_dir=settings.data_dir_path)
+    plan = ArchivePlan(
+        plan_id=plan_data.get("plan_id", ""),
+        source_folder=plan_data.get("source_folder", ""),
+        target_base=plan_data.get("target_base", ""),
+        naming_template=plan_data.get("naming_template", ""),
+        created_at=plan_data.get("created_at", ""),
+        total_files=plan_data.get("total_files", 0),
+    )
+    for item_data in plan_data.get("items", []):
+        plan.items.append(ArchiveItem(
+            source_path=item_data["source"],
+            target_path=item_data["target"],
+            file_type=item_data.get("type", ""),
+            category=item_data.get("category", ""),
+            confidence=item_data.get("confidence", 0),
+            reason=item_data.get("reason", ""),
+            file_size=item_data.get("file_size", 0),
+            file_hash=item_data.get("file_hash", ""),
+            status=item_data.get("status", "pending"),
+            is_duplicate=item_data.get("is_duplicate", False),
+        ))
+
+    # 使用写锁执行
+    with serialized_write():
+        manifest = engine.execute_plan(plan, dry_run=False)
+
+    # 归档即入库：将适合入库的文件记录到知识库
+    knowledge_items = []
+    for item in plan.items:
+        if item.status == "done" and item.category in ("knowledge", "meeting", "project_doc"):
+            knowledge_items.append({
+                "source": item.source_path,
+                "target": item.target_path,
+                "category": item.category,
+                "file_type": item.file_type
+            })
+
+    # 将知识项写入数据库（简化版，后续Phase可增强）
+    if knowledge_items:
+        for ki in knowledge_items:
+            existing = db.query(models.KnowledgeFile).filter_by(filepath=ki["target"]).first()
+            if not existing:
+                kf = models.KnowledgeFile(
+                    filepath=ki["target"],
+                    filename=Path(ki["target"]).name,
+                    filetype=ki["file_type"],
+                    scanned_at=datetime.now()
+                )
+                db.add(kf)
+        db.commit()
+
+    return {
+        "manifest_id": manifest.manifest_id,
+        "plan_id": manifest.plan_id,
+        "operations_count": len(manifest.operations),
+        "knowledge_items_added": len(knowledge_items),
+        "success": True
+    }
+
+
+@router.post("/archive/undo")
+async def archive_undo(request: Request):
+    """撤销归档操作"""
+    from app.archive_engine import ArchiveEngine
+
+    body = await request.json()
+    manifest_id = body.get("manifest_id", "")
+
+    if not manifest_id:
+        return JSONResponse({"error": "缺少 manifest_id"}, status_code=400)
+
+    engine = ArchiveEngine(data_dir=settings.data_dir_path)
+    result = engine.undo_archive(manifest_id)
+    return result
+
+
+@router.get("/archive/manifest/{manifest_id}")
+async def archive_get_manifest(manifest_id: str):
+    """获取归档操作清单"""
+    from app.archive_engine import ArchiveEngine
+
+    engine = ArchiveEngine(data_dir=settings.data_dir_path)
+    manifest = engine.get_manifest(manifest_id)
+    if not manifest:
+        return JSONResponse({"error": "Manifest not found"}, status_code=404)
+    return manifest
