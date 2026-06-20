@@ -1,5 +1,5 @@
 import { useState, useRef, useCallback } from 'react';
-import { Upload, FileAudio, Loader2, Mic } from 'lucide-react';
+import { Upload, FileAudio, Loader2, Mic, Square } from 'lucide-react';
 import { uploadMeetingAudio, transcribeMeetingAudio } from '../../lib/projectsApi';
 
 type Props = {
@@ -16,7 +16,12 @@ export function AudioUploader({ projectId, meetingId, onTranscribed }: Props) {
   const [audioUploaded, setAudioUploaded] = useState(false);
   const [fileName, setFileName] = useState('');
   const [error, setError] = useState('');
+  const [recording, setRecording] = useState(false);
+  const [recordingStartedAt, setRecordingStartedAt] = useState<number | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
+  const recorderRef = useRef<MediaRecorder | null>(null);
+  const chunksRef = useRef<Blob[]>([]);
+  const streamRef = useRef<MediaStream | null>(null);
 
   const handleFile = useCallback(
     async (file: File) => {
@@ -49,6 +54,51 @@ export function AudioUploader({ projectId, meetingId, onTranscribed }: Props) {
     },
     [handleFile],
   );
+
+  const stopRecorderTracks = () => {
+    streamRef.current?.getTracks().forEach((track) => track.stop());
+    streamRef.current = null;
+  };
+
+  const startRecording = async () => {
+    setError('');
+    if (!navigator.mediaDevices?.getUserMedia || typeof MediaRecorder === 'undefined') {
+      setError('当前浏览器不支持录音，请改用音频文件上传。');
+      return;
+    }
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      streamRef.current = stream;
+      chunksRef.current = [];
+      const mimeType = MediaRecorder.isTypeSupported('audio/webm') ? 'audio/webm' : '';
+      const recorder = new MediaRecorder(stream, mimeType ? { mimeType } : undefined);
+      recorderRef.current = recorder;
+      recorder.ondataavailable = (event) => {
+        if (event.data.size > 0) chunksRef.current.push(event.data);
+      };
+      recorder.onstop = () => {
+        const blob = new Blob(chunksRef.current, { type: 'audio/webm' });
+        const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+        const file = new File([blob], `meeting-recording-${stamp}.webm`, { type: 'audio/webm' });
+        stopRecorderTracks();
+        setRecording(false);
+        setRecordingStartedAt(null);
+        void handleFile(file);
+      };
+      recorder.start();
+      setRecording(true);
+      setRecordingStartedAt(Date.now());
+    } catch (err) {
+      stopRecorderTracks();
+      setError(`无法启动录音：${String(err)}`);
+    }
+  };
+
+  const stopRecording = () => {
+    if (recorderRef.current && recorderRef.current.state !== 'inactive') {
+      recorderRef.current.stop();
+    }
+  };
 
   const handleTranscribe = async () => {
     setError('');
@@ -104,15 +154,42 @@ export function AudioUploader({ projectId, meetingId, onTranscribed }: Props) {
       )}
 
       {/* 转写按钮 */}
-      {audioUploaded && !transcribing && (
-        <button
-          onClick={handleTranscribe}
-          className="inline-flex items-center gap-2 rounded-md bg-[#C2703A] px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-[#A85C30]"
-        >
-          <Mic size={14} />
-          开始转写
-        </button>
-      )}
+      <div className="flex flex-wrap items-center gap-2">
+        {!recording ? (
+          <button
+            type="button"
+            onClick={startRecording}
+            disabled={uploading || transcribing}
+            className="inline-flex items-center gap-2 rounded-md border border-stone-300 bg-white px-4 py-2 text-sm font-medium text-stone-700 transition-colors hover:bg-stone-50 disabled:cursor-not-allowed disabled:opacity-60"
+          >
+            <Mic size={14} />
+            开始录音
+          </button>
+        ) : (
+          <button
+            type="button"
+            onClick={stopRecording}
+            className="inline-flex items-center gap-2 rounded-md bg-red-600 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-red-700"
+          >
+            <Square size={14} />
+            停止并上传
+          </button>
+        )}
+        {recording && (
+          <span className="text-xs text-red-600">
+            正在录音{recordingStartedAt ? ` · ${Math.floor((Date.now() - recordingStartedAt) / 1000)} 秒` : ''}
+          </span>
+        )}
+        {audioUploaded && !transcribing && (
+          <button
+            onClick={handleTranscribe}
+            className="inline-flex items-center gap-2 rounded-md bg-[#C2703A] px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-[#A85C30]"
+          >
+            <Mic size={14} />
+            开始转写
+          </button>
+        )}
+      </div>
 
       {transcribing && (
         <div className="flex items-center gap-2 text-sm text-stone-500">

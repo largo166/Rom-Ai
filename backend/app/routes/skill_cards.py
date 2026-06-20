@@ -1,5 +1,12 @@
 # -*- coding: utf-8 -*-
-import json
+"""Skill-card compatibility routes.
+
+Boundary:
+- New card generation should use /api/projects/{project_id}/agent-chat
+  (projects.py → services.execution.run_agent_chat).
+- This module remains for listing, reading, manually creating, and executing
+  legacy cards. Do not add new AI orchestration behavior here.
+"""
 
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import select

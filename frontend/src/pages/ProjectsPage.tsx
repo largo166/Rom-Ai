@@ -6,7 +6,7 @@ import {
   Database,
   FolderKanban,
   AlertTriangle,
-  FolderInput,
+  BookOpen,
   Plus,
   RefreshCw,
   CheckCircle2,
@@ -117,11 +117,11 @@ export function ProjectsPage() {
           </div>
           <div className="flex gap-3">
             <Link
-              to="/inbox"
+              to="/knowledge?tool=local-folder"
               className="inline-flex items-center gap-2 rounded-lg border border-[#333333] bg-[#171717] px-4 py-2 text-sm text-zinc-300 hover:border-zinc-600"
             >
-              <FolderInput size={16} />
-              文件收件箱
+              <BookOpen size={16} />
+              本地资料整理
             </Link>
             <button
               onClick={loadProjects}

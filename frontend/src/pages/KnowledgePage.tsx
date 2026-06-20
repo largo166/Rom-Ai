@@ -16,9 +16,15 @@ import {
 
 const DEFAULT_VAULT = '';
 const MAX_BROWSER_FILES = 360;
-const MAX_BROWSER_TOTAL_BYTES = 120 * 1024 * 1024;
-const MAX_BROWSER_FILE_BYTES = 25 * 1024 * 1024;
-const SUPPORTED_EXTS = new Set(['.md', '.txt', '.pdf', '.docx', '.xlsx', '.csv', '.pptx']);
+const MAX_BROWSER_TOTAL_BYTES = 500 * 1024 * 1024;
+const MAX_BROWSER_FILE_BYTES = 200 * 1024 * 1024;
+const SUPPORTED_EXTS = new Set([
+  '.md', '.txt', '.pdf', '.doc', '.docx', '.xls', '.xlsx', '.csv', '.ppt', '.pptx',
+  '.png', '.jpg', '.jpeg', '.webp', '.gif',
+  '.mp3', '.wav', '.m4a', '.webm',
+  '.zip', '.rar', '.7z',
+  '.dwg', '.dxf', '.rvt', '.skp',
+]);
 const SKIP_DIRS = new Set(['.obsidian', '.git', 'node_modules', 'dist', 'build', '.trash', '.playwright-mcp']);
 const CHAT_STORAGE_KEY = 'rom-ai:knowledge-chat-history:v1';
 const MAX_SAVED_MESSAGES = 80;
@@ -297,9 +303,11 @@ export function KnowledgePage() {
     <main className="min-h-screen bg-[#0A0A0A] px-6 pb-20 pt-28 md:px-12">
       <div className="mx-auto max-w-[1320px]">
         <div className="mb-8">
-          <span className="mb-4 block text-xs font-medium uppercase tracking-[0.3em] text-zinc-500">Architecture Brain</span>
-          <h1 className="mb-4 text-3xl font-bold tracking-tight text-white md:text-5xl">设计知识库</h1>
-          <p className="max-w-3xl text-sm leading-7 text-zinc-400">读取本地 Obsidian、案例和项目资料，提供带来源引用的对话式问答，并为项目技术复用卡提供依据。</p>
+          <span className="mb-4 block text-xs font-medium uppercase tracking-[0.3em] text-zinc-500">Knowledge Base</span>
+          <h1 className="mb-4 text-3xl font-bold tracking-tight text-white md:text-5xl">知识库</h1>
+          <p className="max-w-3xl text-sm leading-7 text-zinc-400">
+            统一承接本地资料整理、上传入库、全文检索和复用资产沉淀。原始文件夹默认不改写，资料进入知识库后再绑定到项目中心。
+          </p>
         </div>
 
         {notice && (
@@ -354,16 +362,16 @@ export function KnowledgePage() {
 
         <section className="mb-6 rounded-lg border border-[#333333] bg-[#111111] p-5">
           <div className="mb-4 flex items-center gap-2 text-sm font-semibold text-white">
-            <FolderOpen size={17} className="text-emerald-300" />
-            知识库管理
+                <FolderOpen size={17} className="text-emerald-300" />
+            本地资料整理
           </div>
           <div className="grid grid-cols-1 gap-5 lg:grid-cols-[1.1fr_0.9fr]">
             <div>
-              <label className="mb-2 block text-xs text-zinc-500">本地路径扫描，推荐用于大型 Obsidian Vault</label>
+              <label className="mb-2 block text-xs text-zinc-500">本地文件夹路径，推荐用于大型项目资料包</label>
               <input value={vaultPath} onChange={(event) => setVaultPath(event.target.value)} className="mb-3 w-full rounded-lg border border-[#333333] bg-[#0E0E0E] px-3 py-3 text-sm text-zinc-200 outline-none" />
               <div className="flex flex-wrap gap-2">
                 <button disabled={busy} onClick={() => runIndex(false)} className="rounded-lg bg-emerald-500 px-4 py-2 text-sm font-semibold text-black">
-                  索引本地路径
+                  一键整理本地文件夹
                 </button>
                 <button disabled={busy} onClick={() => runIndex(true)} className="rounded-lg border border-[#333333] px-4 py-2 text-sm text-zinc-300">
                   重建索引
@@ -385,14 +393,16 @@ export function KnowledgePage() {
               </label>
               <div className="mb-3 rounded-lg border border-emerald-500/20 bg-emerald-500/5 p-3 text-xs leading-6 text-emerald-100/80">
                 <ShieldCheck size={15} className="mr-2 inline text-emerald-300" />
-                点选文件夹会限制数量、体积并跳过系统目录，避免浏览器因一次性读取整个 Vault 而崩溃。
+                点选文件夹会先建立知识库索引与项目绑定建议，不会改写原始文件夹。录音文件会作为会议资料来源进入会议助理。
               </div>
               <input ref={folderInputRef} type="file" multiple className="hidden" onChange={onFolderUpload} {...({ webkitdirectory: '', directory: '' } as Record<string, string>)} />
               <button disabled={busy} onClick={chooseFolderSafely} className="inline-flex w-full items-center justify-center gap-2 rounded-lg bg-white px-4 py-3 text-sm font-semibold text-black">
                 <UploadCloud size={16} />
-                安全点选文件夹
+                点选本地文件夹整理
               </button>
-              <p className="mt-3 text-xs leading-6 text-zinc-500">当前安全上限：最多 {MAX_BROWSER_FILES} 个文件、总量 120MB、单文件 25MB。大型 Vault 请优先使用左侧路径扫描。</p>
+              <p className="mt-3 text-xs leading-6 text-zinc-500">
+                当前安全上限：最多 {MAX_BROWSER_FILES} 个文件、总量 500MB、单文件 200MB。大型项目资料包请优先使用左侧路径扫描。
+              </p>
             </div>
           </div>
         </section>
@@ -405,7 +415,7 @@ export function KnowledgePage() {
                 知识库文件目录
               </div>
               <p className="mt-1 text-xs text-zinc-500">
-                展示知识库当前索引记录里的本地路径。这里只是本地资料索引，不会改变你的原始文件。
+                展示已进入知识库的资料资产。项目中心只读取已绑定到当前项目的资料，不再重复堆叠全局文件列表。
               </p>
             </div>
             <div className="flex flex-col gap-2 sm:flex-row">

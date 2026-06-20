@@ -76,28 +76,24 @@ def _is_relative_to(path: Path, base: Path) -> bool:
 def get_allowed_roots(settings=None) -> list:
     """
     构建授权根目录列表。
-    桌面端：从 settings 读取所有已配置的目录（default_vault_path, data_dir, upload_root, authorized_dirs）
+    桌面端：系统受管目录 + 用户在本机 AppData 配置中授权的目录。
     平台端预留：改为按 user_id/project_id 查 DB
     """
     from app.config import get_settings
+    from app.authorized_dirs import load_authorized_dirs
 
     if settings is None:
         settings = get_settings()
 
     roots = []
     # 已配置的系统目录
-    if settings.default_vault_path:
-        roots.append(Path(settings.default_vault_path))
     if hasattr(settings, "data_dir") and settings.data_dir:
         roots.append(Path(settings.data_dir))
     if hasattr(settings, "upload_root") and settings.upload_root:
         roots.append(Path(settings.upload_root))
 
-    # 用户动态添加的授权目录
-    if hasattr(settings, "authorized_dirs") and settings.authorized_dirs:
-        for d in settings.authorized_dirs:
-            if d and d.strip():
-                roots.append(Path(d))
+    # 用户动态添加的授权目录（本机 AppData JSON）
+    roots.extend(load_authorized_dirs())
 
     # 规范化：resolve 每个根目录
     resolved = []

@@ -14,6 +14,7 @@ from app.config import settings
 from app.json_safety import safe_json_dump, safe_json_parse
 from app.utils import utc_now, utc_now_iso
 from app.services.context import deposit_startup_analysis_to_knowledge
+from app.services.cross_project import collect_cross_project_experience
 from app.services.knowledge import search_knowledge, _refs_from_chunks
 
 
@@ -333,8 +334,13 @@ def team_requirements_from_payload(payload: dict[str, Any]) -> dict[str, Any]:
 
 # ──────────────────────────── 启动分析 ────────────────────────────
 
-def build_startup_analysis_payload(project: models.Project, chunks: list[models.KnowledgeChunk]) -> dict[str, Any]:
+def build_startup_analysis_payload(
+    project: models.Project,
+    chunks: list[models.KnowledgeChunk],
+    cross_project_refs: Optional[list[dict[str, Any]]] = None,
+) -> dict[str, Any]:
     refs = _refs_from_chunks(chunks)
+    cross_project_refs = cross_project_refs or []
     ref_names = [ref["source_file"] for ref in refs[:6]]
     description = project.description or "暂无项目描述，需由项目经理补充业主诉求、规模、阶段和交付目标。"
     technical_focus_cards = [
@@ -508,7 +514,8 @@ def build_startup_analysis_payload(project: models.Project, chunks: list[models.
         "risk_list": risk_list,
         "open_questions": open_questions,
         "mindmap_json": mindmap_json,
-        "source_refs": refs,
+        "source_refs": refs + cross_project_refs,
+        "cross_project_refs": cross_project_refs,
     }
 
 
@@ -542,9 +549,11 @@ def build_startup_analysis_prompt(
     chunks: list[models.KnowledgeChunk],
     files: Optional[list[models.ProjectFile]] = None,
     recent_meetings: Optional[list[models.Meeting]] = None,
+    cross_project_refs: Optional[list[dict[str, Any]]] = None,
 ) -> str:
     file_context = _project_file_context(project, files=files)
     source_refs = _refs_from_chunks(chunks)
+    cross_project_refs = cross_project_refs or []
 
     # 注入最近会议摘要用于跨会议综合
     meeting_context = []
@@ -606,6 +615,14 @@ def build_startup_analysis_prompt(
                 "relevance_score": 0.8,
             }
         ],
+        "cross_project_refs": [
+            {
+                "source_file": "历史项目资料",
+                "source_path": "来源路径",
+                "quote": "可复用经验摘录",
+                "hit_reason": "同城/同类型/关键词命中原因",
+            }
+        ],
     }
     meeting_section = ""
     if meeting_context:
@@ -624,6 +641,8 @@ def build_startup_analysis_prompt(
         f"{json.dumps(file_context, ensure_ascii=False, indent=2)}\n\n"
         "知识库检索片段：\n"
         f"{json.dumps(source_refs, ensure_ascii=False, indent=2)}\n\n"
+        "跨项目经验检索片段（所有业主偏好、周期、日照、退距等复用判断必须来自这里或上方来源；没有来源时写'未检索到可引用历史经验'）：\n"
+        f"{json.dumps(cross_project_refs, ensure_ascii=False, indent=2)}\n\n"
         f"{meeting_section}"
         "输出 JSON Schema 示例：\n"
         f"{json.dumps(expected_schema, ensure_ascii=False, indent=2)}"
@@ -642,6 +661,7 @@ def normalize_startup_analysis_payload(payload: dict[str, Any], fallback: dict[s
         "open_questions",
         "mindmap_json",
         "source_refs",
+        "cross_project_refs",
     ]:
         if not merged.get(key):
             merged[key] = fallback.get(key)
@@ -649,7 +669,7 @@ def normalize_startup_analysis_payload(payload: dict[str, Any], fallback: dict[s
         merged["project_summary"] = fallback.get("project_summary", {})
     if not isinstance(merged.get("mindmap_json"), dict):
         merged["mindmap_json"] = fallback.get("mindmap_json", {"title": "项目启动分析", "nodes": []})
-    for key in ["technical_focus_cards", "task_breakdown", "meeting_agenda", "ppt_outline", "risk_list", "open_questions", "source_refs"]:
+    for key in ["technical_focus_cards", "task_breakdown", "meeting_agenda", "ppt_outline", "risk_list", "open_questions", "source_refs", "cross_project_refs"]:
         if not isinstance(merged.get(key), list):
             merged[key] = fallback.get(key, [])
     merged["mode"] = merged.get("mode") or "deepseek"
@@ -867,9 +887,10 @@ async def run_startup_analysis(db: Session, project: models.Project) -> dict[str
         ]
     )
     chunks = search_knowledge(db, question, limit=10)
+    cross_project_refs = collect_cross_project_experience(db, project, limit=6)
     analysis_files = pending_analysis_files(project)
     recent_meetings = sorted(project.meetings, key=lambda m: m.created_at, reverse=True)[:3] if project.meetings else []
-    fallback_payload = build_startup_analysis_payload(project, chunks)
+    fallback_payload = build_startup_analysis_payload(project, chunks, cross_project_refs=cross_project_refs)
     if analysis_files:
         fallback_payload["analysis_scope"] = {
             "mode": "pending_files_only",
@@ -880,7 +901,13 @@ async def run_startup_analysis(db: Session, project: models.Project) -> dict[str
     if not settings.mock_mode:
         try:
             deepseek_payload = await call_deepseek_json(
-                build_startup_analysis_prompt(project, chunks, files=analysis_files, recent_meetings=recent_meetings)
+                build_startup_analysis_prompt(
+                    project,
+                    chunks,
+                    files=analysis_files,
+                    recent_meetings=recent_meetings,
+                    cross_project_refs=cross_project_refs,
+                )
             )
             if deepseek_payload:
                 payload = normalize_startup_analysis_payload(deepseek_payload, fallback_payload)

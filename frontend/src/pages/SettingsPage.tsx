@@ -1,7 +1,10 @@
 import { useEffect, useState } from 'react';
-import { DownloadCloud, FolderOpen, Loader2, Power, RefreshCw, Save, ShieldCheck, Video } from 'lucide-react';
+import { DownloadCloud, FolderOpen, Loader2, Power, RefreshCw, Save, ShieldCheck, Trash2, Video } from 'lucide-react';
 import {
+  addAuthorizedDir,
+  deleteAuthorizedDir,
   getSettingsStatus,
+  listAuthorizedDirs,
   listDeepSeekModels,
   updateDeepSeekSettings,
   updateTencentMeetingSettings,
@@ -15,6 +18,7 @@ import {
   installDesktopUpdate,
   onDesktopUpdateStatus,
   openDesktopPath,
+  pickDesktopFolder,
   type UpdateStatusPayload,
 } from '../lib/runtime';
 
@@ -33,6 +37,8 @@ export function SettingsPage() {
   const [updateStatus, setUpdateStatus] = useState<UpdateStatusPayload>({ status: 'idle' });
   const [checkingUpdate, setCheckingUpdate] = useState(false);
   const [downloadingUpdate, setDownloadingUpdate] = useState(false);
+  const [authorizedDirs, setAuthorizedDirs] = useState<string[]>([]);
+  const [savingAuthorizedDir, setSavingAuthorizedDir] = useState(false);
 
   async function loadStatus() {
     try {
@@ -40,6 +46,7 @@ export function SettingsPage() {
       setStatus(data);
       setBaseUrl(data.deepseek_base_url || 'https://api.deepseek.com');
       setModel(data.deepseek_model || 'deepseek-chat');
+      setAuthorizedDirs(data.authorized_dirs || []);
     } catch (error) {
       setMessage(`读取设置失败：${String(error)}`);
     }
@@ -55,6 +62,7 @@ export function SettingsPage() {
       setCheckingUpdate(payload.status === 'checking');
       setDownloadingUpdate(payload.status === 'downloading');
     });
+    listAuthorizedDirs().then((data) => setAuthorizedDirs(data.authorized_dirs)).catch(() => undefined);
   }, []);
 
   async function saveDeepSeekSettings() {
@@ -115,6 +123,36 @@ export function SettingsPage() {
   async function openPath(key: string, label: string) {
     const opened = await openDesktopPath(key);
     if (!opened) setMessage(`${label}只能在桌面应用中直接打开。`);
+  }
+
+  async function addAuthorizedFolder() {
+    setSavingAuthorizedDir(true);
+    setMessage('');
+    try {
+      const picked = await pickDesktopFolder();
+      if (!picked || picked.cancelled || !picked.path) {
+        setMessage('未选择文件夹。请在桌面应用中点选一个具体资料文件夹。');
+        return;
+      }
+      const result = await addAuthorizedDir(picked.path);
+      setAuthorizedDirs(result.authorized_dirs);
+      setMessage('授权文件夹已添加。现在可以扫描、整理和索引该目录下的资料。');
+    } catch (error) {
+      setMessage(`添加授权文件夹失败：${String(error)}`);
+    } finally {
+      setSavingAuthorizedDir(false);
+    }
+  }
+
+  async function removeAuthorizedFolder(path: string) {
+    setMessage('');
+    try {
+      const result = await deleteAuthorizedDir(path);
+      setAuthorizedDirs(result.authorized_dirs);
+      setMessage('授权文件夹已移除。该目录会立即停止作为可读取资料根。');
+    } catch (error) {
+      setMessage(`移除授权文件夹失败：${String(error)}`);
+    }
   }
 
   async function checkUpdate() {
@@ -280,6 +318,46 @@ export function SettingsPage() {
                 </div>
                 <div className="rounded-lg border border-white/10 bg-[#171717] p-3 text-xs leading-6 text-zinc-400">
                   配置后，“项目会议”里的创建腾讯会议、同步腾讯会议纪要会使用这个 Token。Token 只写入本机 AppData 配置文件，不会提交到 GitHub。
+                </div>
+              </div>
+            </div>
+
+            <div className="rounded-lg border border-[#333333] bg-[#111111] p-5">
+              <div className="mb-5 flex items-center gap-2 text-sm font-semibold text-white">
+                <FolderOpen size={18} className="text-emerald-300" />
+                授权文件夹
+              </div>
+              <div className="space-y-4 text-sm">
+                <div className="rounded-lg border border-white/10 bg-[#171717] p-3 text-xs leading-6 text-zinc-400">
+                  出厂默认不读取外部资料文件夹。请先添加你的项目资料根目录；系统不会开放整个磁盘，也不会绕过路径安全校验。
+                </div>
+                <button
+                  onClick={addAuthorizedFolder}
+                  disabled={savingAuthorizedDir}
+                  className="inline-flex items-center gap-2 rounded-lg bg-emerald-300 px-4 py-2 text-sm font-semibold text-black hover:bg-emerald-200 disabled:opacity-50"
+                >
+                  {savingAuthorizedDir ? <Loader2 size={16} className="animate-spin" /> : <FolderOpen size={16} />}
+                  添加资料根文件夹
+                </button>
+                <div className="space-y-2">
+                  {authorizedDirs.length ? (
+                    authorizedDirs.map((dir) => (
+                      <div key={dir} className="flex items-center justify-between gap-3 rounded-lg border border-white/10 bg-[#171717] p-3">
+                        <span className="min-w-0 break-all text-zinc-200">{dir}</span>
+                        <button
+                          onClick={() => removeAuthorizedFolder(dir)}
+                          className="inline-flex shrink-0 items-center gap-2 rounded-lg border border-red-400/30 px-3 py-2 text-xs text-red-200 hover:bg-red-400/10"
+                        >
+                          <Trash2 size={14} />
+                          移除
+                        </button>
+                      </div>
+                    ))
+                  ) : (
+                    <div className="rounded-lg border border-dashed border-white/10 bg-[#171717] p-4 text-zinc-500">
+                      尚未授权任何外部资料根。知识库的一键本地整理需要先添加授权文件夹。
+                    </div>
+                  )}
                 </div>
               </div>
             </div>

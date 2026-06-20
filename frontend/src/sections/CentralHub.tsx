@@ -16,7 +16,7 @@ export const CentralHub: React.FC = () => {
       icon: Building2,
       title: 'AI设计代理',
       subtitle: 'Design Agents',
-      desc: '总图、户型、立面、PPT智能生成',
+      desc: '项目研判、任务编排、AI 生图与 PPT 大纲',
       color: 'from-blue-400 to-blue-600',
     },
     {

@@ -34,6 +34,7 @@ from app.services import (
     scan_vault_directory_with_progress,
     search_knowledge,
 )
+from app.services.managed_package import build_managed_package
 
 router = APIRouter(prefix="/api/knowledge", tags=["knowledge"])
 INDEX_JOBS: dict[str, dict] = {}
@@ -52,6 +53,35 @@ def scan(payload: schemas.KnowledgeScanRequest, db: Session = Depends(get_db)):
         rebuild_fts_index(engine)
     except Exception as exc:
         logger.warning("Rebuild FTS5 after scan failed (non-fatal): %s", exc)
+    return result
+
+
+@router.post("/managed-package", response_model=schemas.ManagedPackageOut)
+def create_managed_package(payload: schemas.ManagedPackageRequest, db: Session = Depends(get_db)):
+    try:
+        source_path = validate_path(payload.source_path, allowed_bases=get_allowed_roots(), must_exist=True)
+    except PathValidationError as e:
+        raise HTTPException(status_code=400, detail=f"路径校验失败：{e}")
+    if not source_path.is_dir():
+        raise HTTPException(status_code=404, detail=f"目录不存在：{payload.source_path}")
+
+    project = None
+    if payload.project_id:
+        project = db.get(models.Project, payload.project_id)
+        if not project:
+            raise HTTPException(status_code=404, detail="项目不存在")
+
+    result = build_managed_package(
+        db,
+        source_dir=source_path,
+        project=project,
+        package_label=payload.package_label,
+        copy_files=payload.copy_files,
+    )
+    try:
+        rebuild_fts_index(engine)
+    except Exception as exc:
+        logger.warning("Rebuild FTS5 after managed package failed (non-fatal): %s", exc)
     return result
 
 

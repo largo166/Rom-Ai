@@ -25,10 +25,13 @@ import {
   type ProjectDetail,
   type OverviewDashboardData,
   type AnalysisFreshness,
+  type OkfBundleStatus,
   getOverviewDashboard,
   runStartupAnalysis,
   getAnalysisFreshness,
   runIncrementalAnalysis,
+  getOkfBundle,
+  generateOkfBundle,
 } from '../../lib/projectsApi';
 import { RecommendationPanel } from '../knowledge/RecommendationPanel';
 
@@ -86,6 +89,8 @@ export function OverviewTab({ projectId, project, onRefresh, onSwitchTab }: Prop
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState('');
+  const [okf, setOkf] = useState<OkfBundleStatus | null>(null);
+  const [okfBusy, setOkfBusy] = useState(false);
 
   const fetchOverview = useCallback(async () => {
     setLoading(true);
@@ -103,6 +108,18 @@ export function OverviewTab({ projectId, project, onRefresh, onSwitchTab }: Prop
     fetchOverview();
   }, [fetchOverview]);
 
+  const fetchOkf = useCallback(async () => {
+    try {
+      setOkf(await getOkfBundle(projectId));
+    } catch {
+      setOkf(null);
+    }
+  }, [projectId]);
+
+  useEffect(() => {
+    fetchOkf();
+  }, [fetchOkf]);
+
   async function handleRegenerate() {
     if (!projectId) return;
     setBusy(true);
@@ -116,6 +133,21 @@ export function OverviewTab({ projectId, project, onRefresh, onSwitchTab }: Prop
       setMessage(`生成失败：${String(error)}`);
     } finally {
       setBusy(false);
+    }
+  }
+
+  async function handleGenerateOkf() {
+    setOkfBusy(true);
+    setMessage('');
+    try {
+      const next = await generateOkfBundle(projectId);
+      setOkf(next);
+      await onRefresh();
+      setMessage(`项目数据链接已刷新：${next.files.length} 个 Markdown 索引文件已生成并进入知识库。`);
+    } catch (error) {
+      setMessage(`项目数据链接刷新失败：${String(error)}`);
+    } finally {
+      setOkfBusy(false);
     }
   }
 
@@ -230,6 +262,35 @@ export function OverviewTab({ projectId, project, onRefresh, onSwitchTab }: Prop
         </CardHeader>
         <CardContent className="space-y-4 pt-4">
           <AnalysisFreshnessIndicator projectId={projectId} onRefreshed={fetchOverview} />
+          <div className="flex flex-col gap-4 rounded-lg border border-stone-200 bg-stone-50/70 p-4 md:flex-row md:items-center md:justify-between">
+              <div className="flex min-w-0 items-start gap-3">
+                <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-[#C2703A]/10 text-[#C2703A]">
+                  <Package size={18} />
+                </div>
+                <div className="min-w-0">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <p className="text-sm font-semibold text-stone-900">项目数据链接</p>
+                    <Badge variant="outline" className={okf?.generated ? 'border-green-200 text-green-700' : 'border-stone-300 text-stone-500'}>
+                      {okf?.generated ? '已生成' : '未生成'}
+                    </Badge>
+                  </div>
+                  <p className="mt-1 break-all text-xs leading-5 text-stone-500">
+                    {okf?.generated
+                      ? `${okf.files.length} 个 AI 可读索引文件 · ${okf.updated_at ? `更新于 ${formatDate(okf.updated_at)}` : '等待更新时间'} · ${okf.root_path}`
+                      : '生成后会写入项目受管目录，并进入知识库索引，供 AI 代理读取当前项目资料、会议、任务和判断。'}
+                  </p>
+                </div>
+              </div>
+              <Button
+                size="sm"
+                onClick={handleGenerateOkf}
+                disabled={okfBusy}
+                className="shrink-0 bg-stone-900 text-white hover:bg-stone-800"
+              >
+                {okfBusy ? <Loader2 size={14} className="animate-spin" /> : <RefreshCw size={14} />}
+                {okf?.generated ? '刷新数据链接' : '生成数据链接'}
+              </Button>
+          </div>
           {analysis ? (
             <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
               {/* 项目定位 */}

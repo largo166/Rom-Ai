@@ -21,6 +21,7 @@ from app.services.knowledge import search_knowledge, _refs_from_chunks
 from app.services.context import deposit_meeting_transcript_to_knowledge, deposit_meeting_summary_to_knowledge
 from app.services.analysis import call_deepseek_json, call_deepseek_text
 from app.services.core import project_upload_dir
+from app.services.image_prompting import build_multiview_image_prompts
 
 
 # ──────────────────────────── 项目执行 ────────────────────────────
@@ -692,13 +693,15 @@ async def _generate_image_asset(project: models.Project, prompt: str, output: di
         or prompt
         or f"{project.name} 建筑方案前期意向图"
     )
+    prompt_variants = output.get("prompt_variants") or [{"view": "默认视角", "prompt": image_prompt}]
     result: dict[str, Any] = {
         "provider": settings.image_provider,
         "model": settings.image_model,
         "prompt": image_prompt,
+        "prompt_variants": prompt_variants,
         "image_paths": [],
         "status": "not_configured",
-        "message": "图片生成服务未配置。",
+        "message": "图片生成服务未配置；已保留多视角提示词，可配置 key 后重试。",
     }
     if not settings.image_configured:
         return result
@@ -706,30 +709,34 @@ async def _generate_image_asset(project: models.Project, prompt: str, output: di
     target_dir = project_upload_dir(project.id) / "generated-images"
     target_dir.mkdir(parents=True, exist_ok=True)
     headers = {"Authorization": f"Bearer {settings.image_api_key}"}
-    body = {
-        "model": settings.image_model,
-        "prompt": image_prompt,
-        "n": 1,
-        "size": "1024x1024",
-    }
     try:
+        image_paths = []
         async with httpx.AsyncClient(timeout=120) as client:
-            response = await client.post(f"{settings.image_base_url.rstrip('/')}/images/generations", headers=headers, json=body)
-            response.raise_for_status()
-            data = response.json()
-            first = (data.get("data") or [{}])[0]
-            image_bytes = b""
-            if first.get("b64_json"):
-                image_bytes = base64.b64decode(first["b64_json"])
-            elif first.get("url"):
-                image_response = await client.get(first["url"])
-                image_response.raise_for_status()
-                image_bytes = image_response.content
-            if not image_bytes:
-                raise RuntimeError("图片服务未返回可保存的图片数据")
-            file_path = target_dir / f"ai-image-{datetime.now().strftime('%Y%m%d-%H%M%S')}-{uuid4().hex[:6]}.png"
-            file_path.write_bytes(image_bytes)
-            result.update({"image_paths": [str(file_path)], "status": "succeeded", "message": "图片已生成并保存到项目成果目录。"})
+            for variant in prompt_variants[:4]:
+                variant_prompt = variant.get("prompt") or image_prompt
+                body = {
+                    "model": settings.image_model,
+                    "prompt": variant_prompt,
+                    "n": 1,
+                    "size": "1024x1024",
+                }
+                response = await client.post(f"{settings.image_base_url.rstrip('/')}/images/generations", headers=headers, json=body)
+                response.raise_for_status()
+                data = response.json()
+                first = (data.get("data") or [{}])[0]
+                image_bytes = b""
+                if first.get("b64_json"):
+                    image_bytes = base64.b64decode(first["b64_json"])
+                elif first.get("url"):
+                    image_response = await client.get(first["url"])
+                    image_response.raise_for_status()
+                    image_bytes = image_response.content
+                if not image_bytes:
+                    raise RuntimeError("图片服务未返回可保存的图片数据")
+                file_path = target_dir / f"ai-image-{datetime.now().strftime('%Y%m%d-%H%M%S')}-{uuid4().hex[:6]}.png"
+                file_path.write_bytes(image_bytes)
+                image_paths.append(str(file_path))
+            result.update({"image_paths": image_paths, "status": "succeeded", "message": f"已生成 {len(image_paths)} 张多视角图片。"})
     except Exception as exc:
         result.update({"status": "failed", "message": f"图片生成失败：{exc}"})
     return result
@@ -745,6 +752,8 @@ async def _execute_skill(db: Session, project: models.Project, skill: SkillDefin
     if skill.id == "ai_image_generation":
         prompt_skill = SKILL_BY_ID.get("image_prompt")
         prompt_output = await _deepseek_skill_output(prompt_skill or skill, project, prompt, context, sources)
+        multiview = build_multiview_image_prompts(project, user_prompt=prompt, sources=sources)
+        prompt_output = {**prompt_output, **multiview}
         image_result = await _generate_image_asset(project, prompt, prompt_output)
         output = {**prompt_output, **image_result, "source_context": sources}
 

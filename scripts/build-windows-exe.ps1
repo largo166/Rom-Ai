@@ -11,6 +11,10 @@ $Backend = Join-Path $Root "backend"
 $Desktop = Join-Path $Root "desktop"
 $BackendDist = Join-Path $Backend "dist"
 $Release = Join-Path $Root "release"
+$BackendVenv = Join-Path $Backend ".venv-py39"
+$BackendPython = Join-Path $BackendVenv "Scripts\python.exe"
+$BuildHome = Join-Path $Root ".build-home"
+$BuildAppData = Join-Path $Root ".build-appdata"
 
 function Step($Message) {
   Write-Host ""
@@ -45,6 +49,11 @@ if (Test-Path (Join-Path $Backend ".env")) {
   Write-Warning "Local backend/.env exists. It will NOT be packaged; the desktop app creates an empty AppData config on first start."
 }
 
+New-Item -ItemType Directory -Force -Path $BuildHome, $BuildAppData | Out-Null
+$env:HOME = $BuildHome
+$env:USERPROFILE = $BuildHome
+$env:APPDATA = $BuildAppData
+
 if (-not (Test-Path (Join-Path $Desktop "build\icon.ico"))) {
   throw "Missing desktop/build/icon.ico"
 }
@@ -62,18 +71,18 @@ if (-not $SkipInstall) {
 
   Step "Creating Python virtual environment"
   Push-Location $Backend
-  if (-not (Test-Path ".venv-win\Scripts\python.exe")) {
-    py -3 -m venv .venv-win
+  if (-not (Test-Path $BackendPython)) {
+    python -m venv $BackendVenv
   }
-  .\.venv-win\Scripts\python.exe -m pip install --upgrade pip
-  .\.venv-win\Scripts\python.exe -m pip install -r requirements.txt pyinstaller
+  & $BackendPython -m pip install --upgrade pip
+  & $BackendPython -m pip install -r requirements.txt pyinstaller
   Pop-Location
 }
 
 if (-not $SkipTests) {
   Step "Running backend tests"
   Push-Location $Backend
-  .\.venv-win\Scripts\python.exe -m pytest
+  & $BackendPython -m pytest
   Pop-Location
 
   Step "Running frontend lint"
@@ -97,7 +106,7 @@ if (Test-Path $Release) {
 
 Step "Building backend executable"
 Push-Location $Backend
-.\.venv-win\Scripts\python.exe -m PyInstaller `
+& $BackendPython -m PyInstaller `
   rom_ai.spec `
   --noconfirm `
   --clean `

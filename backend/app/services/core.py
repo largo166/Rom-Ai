@@ -17,10 +17,15 @@ from app.json_safety import safe_json_dump
 
 # ──────────────────────────── 常量 ────────────────────────────
 
-SUPPORTED_PROJECT_EXTS = {".pdf", ".docx", ".xlsx", ".txt", ".md", ".pptx", ".png", ".jpg", ".jpeg"}
-SUPPORTED_INBOX_EXTS = SUPPORTED_PROJECT_EXTS | {".zip", ".rar", ".7z", ".dwg", ".skp", ".rvt", ".csv", ".webp", ".mp3", ".m4a", ".wav", ".mp4"}
-SUPPORTED_KNOWLEDGE_EXTS = {".md", ".txt", ".pdf", ".docx", ".xlsx", ".pptx", ".png", ".jpg", ".jpeg"}
-MAX_BROWSER_UPLOAD_SIZE = 25 * 1024 * 1024
+SUPPORTED_PROJECT_EXTS = {
+    ".pdf", ".doc", ".docx", ".xls", ".xlsx", ".csv", ".txt", ".md", ".ppt", ".pptx",
+    ".png", ".jpg", ".jpeg", ".webp",
+    ".mp3", ".m4a", ".wav", ".webm",
+    ".zip", ".rar", ".7z", ".dwg", ".dxf", ".skp", ".rvt",
+}
+SUPPORTED_INBOX_EXTS = SUPPORTED_PROJECT_EXTS | {".mp4", ".mov"}
+SUPPORTED_KNOWLEDGE_EXTS = SUPPORTED_PROJECT_EXTS | {".mp4", ".mov"}
+MAX_BROWSER_UPLOAD_SIZE = 200 * 1024 * 1024
 DEFAULT_VAULT_EXCLUDE_DIRS = {
     ".git",
     ".obsidian",
@@ -32,14 +37,9 @@ DEFAULT_VAULT_EXCLUDE_DIRS = {
     ".cache",
 }
 DEFAULT_VAULT_EXCLUDE_EXTS = {
-    ".mp4",
     ".mov",
     ".avi",
-    ".zip",
-    ".rar",
-    ".7z",
     ".psd",
-    ".dwg",
     ".bak",
 }
 DEFAULT_VAULT_MAX_FILE_SIZE = 30 * 1024 * 1024
@@ -109,10 +109,18 @@ def ensure_team_members(db: Session) -> None:
 def parse_document(path: Path) -> tuple[str, str]:
     ext = path.suffix.lower()
     try:
-        if ext in {".png", ".jpg", ".jpeg"}:
+        if ext in {".png", ".jpg", ".jpeg", ".webp"}:
             return "", "saved_no_ocr"
+        if ext in {".mp3", ".m4a", ".wav", ".webm", ".mp4", ".mov"}:
+            return "会议录音/视频资料已登记。请在项目中心的会议决策中发起转写与纪要生成。", "saved_audio"
+        if ext in {".zip", ".rar", ".7z"}:
+            return "压缩包资料已登记。请按需解压后再次整理，或作为项目来源文件保留。", "saved_archive"
+        if ext in {".dwg", ".dxf", ".skp", ".rvt"}:
+            return "设计源文件已登记。当前版本保留文件来源，后续可接入 CAD/Revit/SketchUp 解析。", "saved_design_file"
         if ext in {".txt", ".md"}:
             return path.read_text(encoding="utf-8", errors="ignore"), "parsed"
+        if ext in {".doc", ".xls", ".ppt"}:
+            return "旧版 Office 文件已登记。建议另存为 docx/xlsx/pptx 后可解析正文。", "saved_legacy_office"
         if ext == ".pdf":
             reader = PdfReader(str(path))
             text = "\n".join((page.extract_text() or "") for page in reader.pages)

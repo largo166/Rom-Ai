@@ -1,8 +1,9 @@
 from fastapi import APIRouter, HTTPException
 
 from app.cloud import cloud_enabled, cloud_root_path
+from app.authorized_dirs import AuthorizedDirError, add_authorized_dir, list_authorized_dirs, remove_authorized_dir
 from app.config import BASE_DIR, ENV_FILE, LOG_DIR, settings, write_env_value
-from app.schemas import DeepSeekSettingsUpdate, HealthOut, SettingsStatusOut, TencentMeetingSettingsUpdate
+from app.schemas import AuthorizedDirUpdate, DeepSeekSettingsUpdate, HealthOut, SettingsStatusOut, TencentMeetingSettingsUpdate
 from app.services import list_deepseek_models
 from app.utils import utc_now
 
@@ -49,6 +50,7 @@ def settings_status():
         "data_dir": str(BASE_DIR),
         "env_file": str(ENV_FILE),
         "log_dir": str(LOG_DIR),
+        "authorized_dirs": list_authorized_dirs(),
     }
 
 
@@ -73,6 +75,27 @@ def update_tencent_meeting_settings(payload: TencentMeetingSettingsUpdate):
         settings.tencent_meeting_token = next_token
         write_env_value("TENCENT_MEETING_TOKEN", settings.tencent_meeting_token)
     return settings_status()
+
+
+@router.get("/api/settings/authorized-dirs")
+def get_authorized_dirs():
+    return {"authorized_dirs": list_authorized_dirs()}
+
+
+@router.post("/api/settings/authorized-dirs")
+def add_authorized_directory(payload: AuthorizedDirUpdate):
+    try:
+        return {"authorized_dirs": add_authorized_dir(payload.path)}
+    except AuthorizedDirError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.delete("/api/settings/authorized-dirs")
+def delete_authorized_directory(path: str):
+    try:
+        return {"authorized_dirs": remove_authorized_dir(path)}
+    except AuthorizedDirError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @router.get("/api/settings/deepseek/models")

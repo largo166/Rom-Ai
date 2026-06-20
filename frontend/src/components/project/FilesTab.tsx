@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { Link } from 'react-router';
-import { Eye, FolderInput, Upload, FileText, Loader2, RefreshCw, Trash2, X } from 'lucide-react';
+import { Eye, FolderOpen, Upload, FileText, Loader2, RefreshCw, Trash2, X } from 'lucide-react';
 import {
   deleteProjectFile,
   parseOneProjectFile,
@@ -16,6 +16,24 @@ type Props = {
   onRefresh: () => void;
 };
 
+const FILE_GROUPS = [
+  { key: 'input', title: '设计输入', hint: '任务书、指标表、红线图、规划条件、甲方资料' },
+  { key: 'meeting', title: '会议与沟通', hint: '会议纪要、录音、转写、沟通记录' },
+  { key: 'deliverable', title: '过程成果', hint: '总图、户型、立面、汇报材料、PPT 大纲' },
+  { key: 'judgement', title: '风险与判断', hint: '研判、风险、追问、数据链接摘要' },
+  { key: 'reuse', title: '复用资料', hint: '类似项目、案例、方法模板、参考图' },
+] as const;
+
+function fileRole(filename: string, filetype?: string) {
+  const text = `${filename} ${filetype ?? ''}`.toLowerCase();
+  if (/会议|纪要|录音|转写|沟通|meeting|minutes|\.mp3|\.wav|\.m4a|\.webm/.test(text)) return 'meeting';
+  if (/任务书|指标|红线|规划|条件|甲方|brief|\.xls|\.xlsx|\.csv/.test(text)) return 'input';
+  if (/总图|户型|立面|ppt|汇报|方案|成果|\.ppt|\.pptx|\.dwg|\.dxf|\.rvt|\.skp/.test(text)) return 'deliverable';
+  if (/风险|研判|判断|追问|数据链接|okf|分析/.test(text)) return 'judgement';
+  if (/案例|参考|方法|复用|竞品|对标|reference|case|\.jpg|\.jpeg|\.png|\.webp/.test(text)) return 'reuse';
+  return 'input';
+}
+
 export function FilesTab({ projectId, project, onRefresh }: Props) {
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState('');
@@ -28,7 +46,7 @@ export function FilesTab({ projectId, project, onRefresh }: Props) {
     try {
       await uploadProjectFiles(projectId, Array.from(files));
       await onRefresh();
-      setMessage('新文件已上传并标记为待分析。下一步可以点击"解析文件"。');
+      setMessage('新资料已进入当前项目文件成果，并标记为待解析。录音类资料建议进入会议决策生成纪要。');
     } catch (error) {
       setMessage(`上传失败：${String(error)}`);
     } finally {
@@ -99,7 +117,7 @@ export function FilesTab({ projectId, project, onRefresh }: Props) {
           <input
             type="file"
             multiple
-            accept=".pdf,.docx,.xlsx,.txt,.md,.png,.jpg,.jpeg"
+            accept=".pdf,.doc,.docx,.xls,.xlsx,.csv,.ppt,.pptx,.txt,.md,.png,.jpg,.jpeg,.webp,.mp3,.wav,.m4a,.webm,.zip,.rar,.7z,.dwg,.dxf,.rvt,.skp"
             className="hidden"
             onChange={(event) => onUpload(event.target.files)}
           />
@@ -112,11 +130,11 @@ export function FilesTab({ projectId, project, onRefresh }: Props) {
           解析文件
         </button>
         <Link
-          to={`/inbox?project_id=${projectId}`}
+          to="/knowledge?tool=local-folder"
           className="inline-flex items-center gap-2 rounded-lg border border-amber-400/30 px-3 py-2 text-sm text-amber-200 hover:border-amber-300/60"
         >
-          <FolderInput size={15} />
-          从收件箱导入
+          <FolderOpen size={15} />
+          去知识库整理资料
         </Link>
       </div>
 
@@ -141,30 +159,49 @@ export function FilesTab({ projectId, project, onRefresh }: Props) {
 
       {/* File list */}
       <div className="space-y-3">
-        {project.files.map((file) => (
-          <div key={file.id} className="rounded-lg border border-[#333333] bg-[#171717] p-4 text-sm text-zinc-300">
-            <div className="mb-1 flex items-center gap-2">
-              <FileText size={14} className="text-amber-300" />
-              <span className="font-medium text-white">{file.filename}</span>
-            </div>
-            <div className="text-xs text-zinc-500">
-              {file.filetype} · {(file.filesize / 1024).toFixed(1)}KB · {file.parse_status} · {file.analysis_status === 'analyzed' ? '已分析' : '待分析'}
-            </div>
-            <div className="mt-3 flex flex-wrap gap-2">
-              <button onClick={() => onPreview(file.id)} className="inline-flex items-center gap-1 rounded-md border border-[#333333] px-2 py-1 text-xs text-zinc-300 hover:border-amber-400/50">
-                <Eye size={13} />预览
-              </button>
-              <button onClick={() => onReparse(file.id)} className="inline-flex items-center gap-1 rounded-md border border-[#333333] px-2 py-1 text-xs text-zinc-300 hover:border-blue-400/50">
-                <RefreshCw size={13} />重新解析
-              </button>
-              <button onClick={() => onDelete(file.id, file.filename)} className="inline-flex items-center gap-1 rounded-md border border-red-400/30 px-2 py-1 text-xs text-red-300 hover:bg-red-400/10">
-                <Trash2 size={13} />删除
-              </button>
-            </div>
-          </div>
-        ))}
+        {FILE_GROUPS.map((group) => {
+          const files = project.files.filter((file) => fileRole(file.filename, file.filetype) === group.key);
+          if (!files.length) return null;
+          return (
+            <section key={group.key} className="rounded-xl border border-[#333333] bg-[#111111] p-4">
+              <div className="mb-3 flex items-end justify-between gap-3">
+                <div>
+                  <h3 className="text-sm font-semibold text-white">{group.title}</h3>
+                  <p className="mt-1 text-xs text-zinc-500">{group.hint}</p>
+                </div>
+                <span className="rounded-full bg-white/5 px-2.5 py-1 text-xs text-zinc-400">{files.length} 个</span>
+              </div>
+              <div className="space-y-3">
+                {files.map((file) => (
+                  <div key={file.id} className="rounded-lg border border-[#333333] bg-[#171717] p-4 text-sm text-zinc-300">
+                    <div className="mb-1 flex items-center gap-2">
+                      <FileText size={14} className="text-amber-300" />
+                      <span className="font-medium text-white">{file.filename}</span>
+                    </div>
+                    <div className="text-xs text-zinc-500">
+                      {file.filetype} · {(file.filesize / 1024).toFixed(1)}KB · {file.parse_status} · {file.analysis_status === 'analyzed' ? '已分析' : '待分析'}
+                    </div>
+                    <div className="mt-3 flex flex-wrap gap-2">
+                      <button onClick={() => onPreview(file.id)} className="inline-flex items-center gap-1 rounded-md border border-[#333333] px-2 py-1 text-xs text-zinc-300 hover:border-amber-400/50">
+                        <Eye size={13} />预览
+                      </button>
+                      <button onClick={() => onReparse(file.id)} className="inline-flex items-center gap-1 rounded-md border border-[#333333] px-2 py-1 text-xs text-zinc-300 hover:border-blue-400/50">
+                        <RefreshCw size={13} />重新解析
+                      </button>
+                      <button onClick={() => onDelete(file.id, file.filename)} className="inline-flex items-center gap-1 rounded-md border border-red-400/30 px-2 py-1 text-xs text-red-300 hover:bg-red-400/10">
+                        <Trash2 size={13} />删除
+                      </button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </section>
+          );
+        })}
         {project.files.length === 0 && (
-          <p className="text-sm text-zinc-500">暂无文件。点击"上传资料"开始。</p>
+          <p className="text-sm text-zinc-500">
+            暂无当前项目文件成果。可直接上传资料，或先到知识库进行本地资料整理，再绑定到项目中心。
+          </p>
         )}
       </div>
     </div>

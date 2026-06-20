@@ -40,6 +40,21 @@ export type ProjectDetail = Project & {
   assignments: ProjectAssignment[];
 };
 
+export type OkfBundleFile = {
+  name: string;
+  path: string;
+  size: number;
+  updated_at: string | null;
+};
+
+export type OkfBundleStatus = {
+  project_id: string;
+  generated: boolean;
+  root_path: string;
+  files: OkfBundleFile[];
+  updated_at: string | null;
+};
+
 export type ProjectFile = {
   id: string;
   project_id: string;
@@ -334,6 +349,11 @@ export type SettingsStatus = {
   data_dir?: string;
   env_file?: string;
   log_dir?: string;
+  authorized_dirs?: string[];
+};
+
+export type AuthorizedDirsResult = {
+  authorized_dirs: string[];
 };
 
 export type DeepSeekSettingsPayload = {
@@ -690,6 +710,16 @@ export function getProject(projectId: string) {
   return request<ProjectDetail>(`/api/projects/${projectId}`);
 }
 
+export function getOkfBundle(projectId: string) {
+  return request<OkfBundleStatus>(`/api/projects/${projectId}/okf-bundle`);
+}
+
+export function generateOkfBundle(projectId: string) {
+  return request<OkfBundleStatus>(`/api/projects/${projectId}/okf-bundle/generate`, {
+    method: 'POST',
+  });
+}
+
 export function deleteProject(projectId: string) {
   return request<{ deleted: boolean; deleted_project_id: string; deleted_files: number }>(`/api/projects/${projectId}`, {
     method: 'DELETE',
@@ -698,6 +728,24 @@ export function deleteProject(projectId: string) {
 
 export function getSettingsStatus() {
   return request<SettingsStatus>('/api/settings/status');
+}
+
+export function listAuthorizedDirs() {
+  return request<AuthorizedDirsResult>('/api/settings/authorized-dirs');
+}
+
+export function addAuthorizedDir(path: string) {
+  return request<AuthorizedDirsResult>('/api/settings/authorized-dirs', {
+    method: 'POST',
+    body: JSON.stringify({ path }),
+  });
+}
+
+export function deleteAuthorizedDir(path: string) {
+  const query = new URLSearchParams({ path });
+  return request<AuthorizedDirsResult>(`/api/settings/authorized-dirs?${query.toString()}`, {
+    method: 'DELETE',
+  });
 }
 
 export function updateDeepSeekSettings(payload: DeepSeekSettingsPayload) {

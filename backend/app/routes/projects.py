@@ -115,7 +115,9 @@ from app.services import (
     normalize_analysis_payload,
     parse_tencent_meeting_result,
     parse_document,
+    project_okf_bundle_status,
     project_upload_dir,
+    generate_project_okf_bundle,
     run_project_execution,
     run_agent_chat,
     run_skill_card,
@@ -159,6 +161,27 @@ def get_project(project_id: str, db: Session = Depends(get_db)):
     if not project:
         raise HTTPException(status_code=404, detail="项目不存在")
     return project
+
+
+@router.get("/{project_id}/okf-bundle", response_model=schemas.OkfBundleOut)
+def get_project_okf_bundle(project_id: str, db: Session = Depends(get_db)):
+    project = crud.get_project(db, project_id)
+    if not project:
+        raise HTTPException(status_code=404, detail="项目不存在")
+    return project_okf_bundle_status(project)
+
+
+@router.post("/{project_id}/okf-bundle/generate", response_model=schemas.OkfBundleOut)
+def generate_okf_bundle(project_id: str, db: Session = Depends(get_db)):
+    project = crud.get_project(db, project_id)
+    if not project:
+        raise HTTPException(status_code=404, detail="项目不存在")
+    try:
+        return generate_project_okf_bundle(db, project)
+    except Exception as exc:
+        db.rollback()
+        logger.exception("Data link bundle generation failed project=%s", project_id)
+        raise HTTPException(status_code=500, detail=f"项目数据链接生成失败：{exc}")
 
 
 # ── Phase 3: 项目概览指挥台端点 ─────────────────────────────────────────────
@@ -1356,6 +1379,17 @@ async def upload_meeting_audio(
     # \u66f4\u65b0 Meeting
     meeting.audio_file_path = audio_path
     db.commit()
+    from app.services.event_engine import emit_change_event
+    emit_change_event(
+        db,
+        project_id,
+        "meeting_audio_uploaded",
+        source_type="meeting",
+        source_id=meeting_id,
+        affected_fields=["meetings", "audio", "transcript"],
+        new_snapshot={"filename": file.filename, "audio_path": audio_path, "size_bytes": len(content)},
+        description=f"会议录音已上传: {file.filename}",
+    )
 
     return {"message": "\u97f3\u9891\u4e0a\u4f20\u6210\u529f", "audio_path": audio_path, "size_mb": round(len(content) / 1024 / 1024, 2)}
 
@@ -1381,14 +1415,38 @@ async def transcribe_meeting_audio(
         raise HTTPException(404, "\u97f3\u9891\u6587\u4ef6\u4e0d\u5b58\u5728\uff0c\u53ef\u80fd\u5df2\u88ab\u5220\u9664")
 
     # \u6267\u884c\u8f6c\u5199
-    result = await transcribe_audio(meeting.audio_file_path)
+    try:
+        result = await transcribe_audio(meeting.audio_file_path)
+    except ValueError as exc:
+        meeting.sync_status = "audio_transcribe_failed"
+        meeting.sync_error = str(exc)
+        db.commit()
+        raise HTTPException(status_code=400, detail=f"音频已保存，但转写服务不可用：{exc}") from exc
+    except Exception as exc:
+        meeting.sync_status = "audio_transcribe_failed"
+        meeting.sync_error = str(exc)
+        db.commit()
+        raise HTTPException(status_code=502, detail=f"音频转写失败，可稍后重试：{exc}") from exc
 
     # \u6e05\u6d17\u5e76\u4fdd\u5b58
     cleaned_text = clean_transcript_text(result.text)
     meeting.transcript = cleaned_text
     meeting.audio_transcribed_at = datetime.now()
     meeting.transcription_source = result.source
+    meeting.sync_status = "audio_transcribed"
+    meeting.sync_error = ""
     db.commit()
+    from app.services.event_engine import emit_change_event
+    emit_change_event(
+        db,
+        project_id,
+        "meeting_audio_transcribed",
+        source_type="meeting",
+        source_id=meeting_id,
+        affected_fields=["meetings", "transcript", "okf", "analysis"],
+        new_snapshot={"source": result.source, "segment_count": len(result.segments)},
+        description=f"会议录音已转写: {meeting.title}",
+    )
 
     return {
         "message": "\u8f6c\u5199\u5b8c\u6210",

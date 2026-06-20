@@ -4,7 +4,7 @@ import { Bot, FileText, ListChecks, Presentation, Sparkles } from 'lucide-react'
 const cards = [
   { title: '任务拆解', description: '把项目目标转成任务、负责人和交付要求。', icon: ListChecks },
   { title: '技术重点', description: '提取日照、退界、面积、消防等复用重点。', icon: FileText },
-  { title: '汇报结构', description: '生成业主汇报或内部评审的 PPT 框架。', icon: Presentation },
+  { title: 'PPT 大纲', description: '生成业主汇报或内部评审的 PPT 大纲。', icon: Presentation },
 ];
 
 export function AIDesignAgentFeature() {
@@ -18,7 +18,7 @@ export function AIDesignAgentFeature() {
           </div>
           <h2 className="mb-4 text-3xl font-bold text-white md:text-5xl">AI 设计代理</h2>
           <p className="text-sm leading-7 text-zinc-400">
-            桌面版保留稳定的项目工作台入口，AI 代理能力通过项目上下文、知识库检索和技能卡片协同运行。
+            桌面版保留稳定的项目工作台入口，AI 代理通过目标输入自动调用项目研判、任务编排、AI 生图和 PPT 大纲能力。
           </p>
         </div>
 

@@ -1,10 +1,9 @@
 import { useState } from 'react';
 import { NavLink } from 'react-router';
-import { BookOpen, Bot, FolderInput, FolderKanban, Menu, Settings, Users, X } from 'lucide-react';
+import { BookOpen, Bot, FolderKanban, Menu, Settings, Users, X } from 'lucide-react';
 
 const navItems = [
   { label: '项目中心', href: '/projects', icon: FolderKanban },
-  { label: '文件收件箱', href: '/inbox', icon: FolderInput },
   { label: '知识库', href: '/knowledge', icon: BookOpen },
   { label: 'AI代理', href: '/agents', icon: Bot },
   { label: '网络平台', href: '/network', icon: Users },

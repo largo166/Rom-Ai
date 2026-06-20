@@ -459,7 +459,7 @@ def search_knowledge(db: Session, question: str, limit: int = 6) -> list[models.
         try:
             from app.retrieval import FTS5RetrievalEngine
 
-            retrieval = FTS5RetrievalEngine(db_engine)
+            retrieval = FTS5RetrievalEngine(db.get_bind() or db_engine)
             fts_query = " ".join(terms[:12])
             results = retrieval.search(fts_query, top_k=limit)
             if results:

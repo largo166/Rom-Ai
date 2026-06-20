@@ -54,7 +54,7 @@ BUILTIN_SKILLS: tuple[SkillDefinition, ...] = (
     ),
     SkillDefinition(
         id="ppt_outline",
-        name="PPT大纲卡",
+        name="PPT 大纲",
         description="生成面向业主汇报或内部评审的页面结构和汇报逻辑。",
         triggers=("ppt", "PPT", "汇报", "演示", "presentation", "框架", "大纲"),
         retrieval_required=True,
@@ -90,7 +90,7 @@ BUILTIN_SKILLS: tuple[SkillDefinition, ...] = (
     ),
     SkillDefinition(
         id="image_prompt",
-        name="生图提示词",
+        name="AI 生图提示词",
         description="基于当前项目和参考图分类生成建筑意向图提示词。",
         triggers=("提示词", "生图提示", "prompt", "效果图提示", "立面提示"),
         retrieval_required=True,
@@ -99,7 +99,7 @@ BUILTIN_SKILLS: tuple[SkillDefinition, ...] = (
     ),
     SkillDefinition(
         id="ai_image_generation",
-        name="AI生图",
+        name="AI 生图",
         description="调用 Huashu/OpenAI-compatible 图片服务生成项目相关图片。",
         triggers=("生图", "生成图片", "效果图", "意向图", "立面图", "AI生图", "渲染"),
         executor="image_generation",

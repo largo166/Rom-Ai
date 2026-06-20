@@ -1,4 +1,11 @@
-import json
+"""AI agent catalog routes.
+
+Boundary:
+- /api/agents exposes the AI capability catalog and legacy agent-run entry.
+- /api/projects/{project_id}/agent-chat in projects.py is the authoritative
+  runtime entry for creating new skill result cards from user intent.
+- /api/projects/{project_id}/skill-cards is the result-card compatibility API.
+"""
 
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session

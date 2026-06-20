@@ -80,7 +80,7 @@ export function RecommendationPanel({ projectId, trigger, options }: Props) {
     return () => {
       cancelled = true;
     };
-  }, [projectId, trigger, collapsed, fetched]);
+  }, [projectId, trigger, options, collapsed, fetched]);
 
   const items = data?.recommendations ?? [];
   const count = items.length;

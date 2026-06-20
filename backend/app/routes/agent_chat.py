@@ -1,6 +1,11 @@
 """
-AI代理聊天端点
-POST /api/projects/{project_id}/agent-chat
+AI代理上下文与回写兼容端点
+
+Runtime boundary:
+- POST /api/projects/{project_id}/agent-chat is implemented in projects.py and
+  calls services.execution.run_agent_chat.
+- This module only exposes lightweight context and writeback compatibility.
+
 GET  /api/projects/{project_id}/agent-context
 POST /api/projects/{project_id}/agent-chat/writeback
 """
@@ -11,9 +16,9 @@ from fastapi import APIRouter, Depends, Request
 from fastapi.responses import JSONResponse
 from sqlalchemy.orm import Session
 
-from app.database import engine as db_engine, get_db, serialized_write
+from app.database import get_db, serialized_write
 from app.json_safety import safe_json_dump, safe_json_parse
-from app.orchestrator import SKILL_MANIFEST, Orchestrator
+from app.skill_manifest import list_builtin_skills
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -75,17 +80,6 @@ def _extract_json_from_text(text: str) -> str:
     return text
 
 
-async def _call_deepseek(prompt: str) -> str:
-    """调用 DeepSeek，返回文本（复用 services.py 的实现）"""
-    from app.services import call_deepseek_text
-
-    system_prompt = (
-        "你是建筑设计项目AI助手。只输出JSON，不输出Markdown包装（不加```json）。"
-        "字段必须稳定，缺失信息要明确标注。"
-    )
-    return await call_deepseek_text(prompt, system_prompt)
-
-
 # ─────────────────────────────────────────────
 # 端点
 # ─────────────────────────────────────────────
@@ -112,7 +106,7 @@ async def get_agent_context(project_id: str, db: Session = Depends(get_db)):
                 "description": s["description"],
                 "retrieval_required": s.get("retrieval_required", False),
             }
-            for s in SKILL_MANIFEST
+            for s in list_builtin_skills()
         ],
     }
 

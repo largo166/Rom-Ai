@@ -27,7 +27,8 @@ class Settings(BaseSettings):
     cloud_upload_root: str = str(BASE_DIR / "cloud")
     database_url: str = "sqlite:///./data/rmo_ai.db"
     data_dir: str = ""
-    authorized_dirs: list = []  # JSON 数组，用户动态添加的授权目录
+    authorized_dirs: list = []  # 兼容旧 env；实际授权目录从 AppData authorized_dirs.json 读取
+    allow_user_roots: bool = False  # 兼容旧 env；不再默认开放 Desktop/Documents/Downloads
 
     # 音频转写配置
     audio_provider: str = "whisper"  # whisper / tencent_cloud

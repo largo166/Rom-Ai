@@ -31,6 +31,10 @@ interface ArchiveItem {
 
 type Step = 'select' | 'scanning' | 'review' | 'confirm' | 'executing' | 'done';
 
+function getErrorMessage(error: unknown, fallback = '操作失败') {
+  return error instanceof Error ? error.message : String(error || fallback);
+}
+
 export function ArchiveWizard() {
   const [step, setStep] = useState<Step>('select');
   const [folderPath, setFolderPath] = useState('');
@@ -57,8 +61,8 @@ export function ArchiveWizard() {
           await scanFolder(result.path);
         }
         return;
-      } catch (e: any) {
-        setError(`桌面选择器失败：${e.message || e}，将使用手动输入`);
+      } catch (e: unknown) {
+        setError(`桌面选择器失败：${getErrorMessage(e)}，将使用手动输入`);
       }
     }
     // fallback: 手动输入
@@ -88,8 +92,8 @@ export function ArchiveWizard() {
       }
       setScannedFiles(data.files);
       setStep('review');
-    } catch (e: any) {
-      setError(e.message || '网络错误');
+    } catch (e: unknown) {
+      setError(getErrorMessage(e, '网络错误'));
       setStep('select');
     } finally {
       setLoading(false);
@@ -135,8 +139,8 @@ export function ArchiveWizard() {
         duplicates: data.skipped_duplicates
       });
       setStep('confirm');
-    } catch (e: any) {
-      setError(e.message);
+    } catch (e: unknown) {
+      setError(getErrorMessage(e));
     } finally {
       setLoading(false);
     }
@@ -176,8 +180,8 @@ export function ArchiveWizard() {
         setError('执行失败');
         setStep('confirm');
       }
-    } catch (e: any) {
-      setError(e.message);
+    } catch (e: unknown) {
+      setError(getErrorMessage(e));
       setStep('confirm');
     } finally {
       setLoading(false);
@@ -206,8 +210,8 @@ export function ArchiveWizard() {
       } else {
         setError(`撤销部分失败：${data.errors?.join(', ')}`);
       }
-    } catch (e: any) {
-      setError(e.message);
+    } catch (e: unknown) {
+      setError(getErrorMessage(e));
     } finally {
       setLoading(false);
     }

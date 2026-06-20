@@ -1,7 +1,7 @@
 ﻿import { useEffect, useRef, useState } from 'react';
 import {
-  ListTodo, AlertTriangle, FileText, Monitor, BarChart3, PenTool,
-  Image, Sparkles, Brain, CheckCircle, Send, Loader2, Bot, X, ClipboardCopy,
+  ListTodo, AlertTriangle, FileText, Monitor,
+  Sparkles, CheckCircle, Send, Loader2, Bot, X, ClipboardCopy,
 } from 'lucide-react';
 import {
   listProjects,
@@ -22,17 +22,12 @@ type SkillUi = {
 };
 
 const activeSkills: SkillUi[] = [
-  { type: 'brief_interpretation', title: '任务书解读卡', Icon: FileText, color: 'green', desc: '抽取显性目标、隐性诉求、设计矛盾和切入点' },
-  { type: 'task_breakdown', title: '任务拆解卡', Icon: ListTodo, color: 'blue', desc: '把项目描述转成任务、责任角色和交付要求' },
-  { type: 'technical_focus', title: '技术重点卡', Icon: AlertTriangle, color: 'amber', desc: '提取日照、退界、面积、消防等复用重点' },
-  { type: 'meeting_minutes', title: '会议纪要卡', Icon: FileText, color: 'green', desc: '把会议记录转成纪要、脑图和待办' },
-  { type: 'ppt_outline', title: 'PPT大纲卡', Icon: Monitor, color: 'purple', desc: '生成业主汇报或内部评审的PPT框架' },
-  { type: 'competitor_analysis', title: '竞品分析', Icon: BarChart3, color: 'amber', desc: '调取历史项目和案例经验，提炼可迁移策略' },
-  { type: 'concept_copy', title: '概念文字稿', Icon: PenTool, color: 'green', desc: '生成概念标题、设计叙事和汇报文字' },
-  { type: 'reference_image_classification', title: '参考图分类', Icon: Image, color: 'blue', desc: '整理参考图的风格、材料和可复用点' },
-  { type: 'image_prompt', title: '生图提示词', Icon: Sparkles, color: 'purple', desc: '基于当前项目生成建筑意向图提示词' },
-  { type: 'ai_image_generation', title: 'AI生图', Icon: Brain, color: 'amber', desc: '调用内置图片生成服务产出项目意向图' },
-  { type: 'scheme_review', title: '方案评审', Icon: CheckCircle, color: 'green', desc: '按项目资料和知识库经验检查方案风险' },
+  { type: 'brief_interpretation', title: '项目研判', Icon: AlertTriangle, color: 'amber', desc: '启动分析、风险识别、追问清单和下一步建议' },
+  { type: 'meeting_minutes', title: '会议助理', Icon: FileText, color: 'green', desc: '会议纪要、录音转写、甲方诉求转译和会议待办' },
+  { type: 'task_breakdown', title: '任务编排', Icon: ListTodo, color: 'blue', desc: '任务拆解、责任人建议、里程碑和时间轴' },
+  { type: 'ppt_outline', title: '汇报生成', Icon: Monitor, color: 'purple', desc: '汇报主线、PPT 大纲、讲稿和缺图清单' },
+  { type: 'ai_image_generation', title: 'AI 生图', Icon: Sparkles, color: 'amber', desc: 'AI 生图、AI 生图提示词、参考图整理和图面表达建议' },
+  { type: 'scheme_review', title: '知识复用', Icon: CheckCircle, color: 'green', desc: '类似项目、历史经验、方法模板和方案评审 RAG' },
 ];
 
 function colorClasses(color: string) {
@@ -47,18 +42,13 @@ function colorClasses(color: string) {
 
 /* ---------- Intent detection ---------- */
 function detectIntent(text: string): string | null {
-  if (/任务书|设计任务|需求解读|甲方要求/.test(text)) return 'brief_interpretation';
-  if (/任务|拆解|分工|排期/.test(text)) return 'task_breakdown';
-  if (/技术|重点|日照|退界|消防|规范/.test(text)) return 'technical_focus';
+  if (/AI生图|AI 生图|生成图片|效果图|意向图|渲染|生图/.test(text)) return 'ai_image_generation';
+  if (/PPT大纲|PPT 大纲|汇报|演示|大纲/.test(text)) return 'ppt_outline';
+  if (/任务|拆解|分工|排期|时间轴|待办安排/.test(text)) return 'task_breakdown';
   if (/会议|纪要|待办|记录|腾讯会议|转写|播报/.test(text)) return 'meeting_minutes';
-  if (/PPT|汇报|演示|大纲/.test(text)) return 'ppt_outline';
-  if (/竞品|对标|类似项目|案例|参考项目/.test(text)) return 'competitor_analysis';
-  if (/概念|文案|文字稿|叙事|故事线/.test(text)) return 'concept_copy';
-  if (/参考图|图片分类|意向图|素材/.test(text)) return 'reference_image_classification';
-  if (/提示词|prompt|生图提示/.test(text)) return 'image_prompt';
-  if (/生图|生成图片|效果图|AI生图|渲染/.test(text)) return 'ai_image_generation';
-  if (/评审|检查方案|方案问题|风险检查/.test(text)) return 'scheme_review';
-  return null;
+  if (/竞品|对标|类似项目|案例|参考项目|知识复用|评审|检查方案|方案问题|风险检查/.test(text)) return 'scheme_review';
+  if (/任务书|设计任务|需求解读|甲方要求|技术|重点|日照|退界|消防|规范|项目分析|研判|启动分析/.test(text)) return 'brief_interpretation';
+  return 'brief_interpretation';
 }
 
 /* ---------- Types ---------- */
@@ -176,7 +166,7 @@ export function AgentsPage() {
           </span>
           <h1 className="mb-4 text-3xl font-bold tracking-tight text-white md:text-5xl">AI设计代理</h1>
           <p className="max-w-3xl text-sm leading-7 text-zinc-400">
-            输入需求，系统自动识别意图并执行技能卡片，成果回写到项目作战室。
+            输入目标，系统会自动读取项目数据链接、会议、任务和知识库，后台调用项目研判、会议助理、任务编排、PPT 大纲、AI 生图和知识复用能力，并生成可查看的成果卡。
           </p>
         </div>
 
@@ -212,9 +202,9 @@ export function AgentsPage() {
                 <div className="flex h-full min-h-[420px] items-center justify-center text-center">
                   <div>
                     <Bot size={40} className="mx-auto mb-4 text-zinc-600" />
-                    <p className="text-sm text-zinc-500">描述您的需求，AI 将自动识别意图</p>
+                    <p className="text-sm text-zinc-500">描述目标，AI 将自动选择后台能力</p>
                     <p className="mt-2 text-xs text-zinc-600">
-                      当前输入会绑定所选项目，并自动调用技能卡生成成果
+                      例如：帮我准备下周甲方汇报；根据最近会议生成任务安排；为当前项目生成 AI 生图
                     </p>
                   </div>
                 </div>
@@ -271,7 +261,7 @@ export function AgentsPage() {
                   value={input}
                   onChange={(e) => setInput(e.target.value)}
                   onKeyDown={(e) => e.key === 'Enter' && !e.shiftKey && send()}
-                  placeholder="输入需求，如：帮我拆解任务..."
+                  placeholder="输入目标，如：帮我准备下周甲方汇报，生成 PPT 大纲和 AI 生图提示词..."
                   className="flex-1 rounded-xl border border-white/10 bg-gray-800 px-4 py-3 text-sm text-zinc-200 outline-none placeholder:text-zinc-500 focus:border-amber-400/60"
                 />
                 <button
@@ -288,7 +278,8 @@ export function AgentsPage() {
           {/* Right — skill cards (40%) */}
           <div className="space-y-5">
             <div className="rounded-xl border border-white/10 bg-white/5 p-5">
-              <h2 className="mb-4 text-sm font-semibold text-white">内置技能卡片</h2>
+              <h2 className="mb-1 text-sm font-semibold text-white">成果卡类型</h2>
+              <p className="mb-4 text-xs leading-5 text-zinc-500">点击卡片可快速启动对应成果；日常建议直接在左侧输入目标，让 AI 自动后台编排。</p>
               <div className="grid grid-cols-2 gap-3">
                 {activeSkills.map((skill) => {
                   const c = colorClasses(skill.color);
@@ -317,7 +308,7 @@ export function AgentsPage() {
           <div className="w-full max-w-md rounded-xl border border-white/10 bg-gray-800 p-6">
             <div className="mb-4 flex items-center justify-between">
               <h2 className="text-lg font-semibold text-white">
-                执行 {activeSkills.find((s) => s.type === dialogSkill)?.title}
+                生成 {activeSkills.find((s) => s.type === dialogSkill)?.title} 成果
               </h2>
               <button onClick={() => setDialogSkill(null)} className="text-zinc-400 transition-colors hover:text-white">
                 <X size={20} />
@@ -326,7 +317,7 @@ export function AgentsPage() {
             <textarea
               value={dialogInput}
               onChange={(e) => setDialogInput(e.target.value)}
-              placeholder="补充执行参数（可选）..."
+              placeholder="补充目标或约束（可选），例如：偏现代简洁、用于甲方汇报、需要三页 PPT 大纲..."
               className="mb-4 min-h-[120px] w-full resize-none rounded-xl border border-white/10 bg-gray-900 px-4 py-3 text-sm text-zinc-200 outline-none placeholder:text-zinc-500"
             />
             <button

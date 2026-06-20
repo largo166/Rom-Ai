@@ -246,6 +246,7 @@ export function MeetingsTab({ projectId, meetings, onRefresh }: Props) {
 
   // 播报状态
   const [speakingMap, setSpeakingMap] = useState<Record<string, boolean>>({});
+  const [pausedMap, setPausedMap] = useState<Record<string, boolean>>({});
 
   // 腾讯脚本状态
   const [scriptStatus, setScriptStatus] = useState<MeetingScriptStatus | null>(null);
@@ -426,17 +427,36 @@ export function MeetingsTab({ projectId, meetings, onRefresh }: Props) {
     if (speakingMap[meetingId]) {
       window.speechSynthesis.cancel();
       setSpeakingMap((prev) => ({ ...prev, [meetingId]: false }));
+      setPausedMap((prev) => ({ ...prev, [meetingId]: false }));
       return;
     }
     window.speechSynthesis.cancel();
     const utterance = new SpeechSynthesisUtterance(script);
     utterance.lang = 'zh-CN';
     utterance.rate = 1.0;
-    utterance.onend = () => setSpeakingMap((prev) => ({ ...prev, [meetingId]: false }));
-    utterance.onerror = () => setSpeakingMap((prev) => ({ ...prev, [meetingId]: false }));
+    utterance.onend = () => {
+      setSpeakingMap((prev) => ({ ...prev, [meetingId]: false }));
+      setPausedMap((prev) => ({ ...prev, [meetingId]: false }));
+    };
+    utterance.onerror = () => {
+      setSpeakingMap((prev) => ({ ...prev, [meetingId]: false }));
+      setPausedMap((prev) => ({ ...prev, [meetingId]: false }));
+    };
     speechSynthRef.current = utterance;
     setSpeakingMap((prev) => ({ ...prev, [meetingId]: true }));
     window.speechSynthesis.speak(utterance);
+  }
+
+  function handlePauseSpeak(meetingId: string) {
+    if (!('speechSynthesis' in window)) return;
+    window.speechSynthesis.pause();
+    setPausedMap((prev) => ({ ...prev, [meetingId]: true }));
+  }
+
+  function handleResumeSpeak(meetingId: string) {
+    if (!('speechSynthesis' in window)) return;
+    window.speechSynthesis.resume();
+    setPausedMap((prev) => ({ ...prev, [meetingId]: false }));
   }
 
   async function handleSyncTencentMinutes(meeting: ProjectMeeting) {
@@ -810,6 +830,7 @@ export function MeetingsTab({ projectId, meetings, onRefresh }: Props) {
             const showInternal = showInternalMap[meeting.id] ?? true;
             const isConfirming = confirmingMap[meeting.id] ?? false;
             const isSpeaking = speakingMap[meeting.id] ?? false;
+            const isPaused = pausedMap[meeting.id] ?? false;
             const currentMinutes = minutesResult
               ? (showInternal ? minutesResult.internal_version : minutesResult.external_version as MeetingMinutesContent)
               : null;
@@ -1172,17 +1193,37 @@ export function MeetingsTab({ projectId, meetings, onRefresh }: Props) {
                                   <Volume2 size={12} />
                                   播报脚本
                                 </div>
-                                <button
-                                  onClick={() => handleSpeak(meeting.id, minutesResult.broadcast_script)}
-                                  className={`inline-flex items-center gap-1.5 rounded-lg border px-3 py-1.5 text-xs transition-colors ${
-                                    isSpeaking
-                                      ? 'border-red-200 bg-red-50 text-red-700 hover:bg-red-100'
-                                      : 'border-stone-200 bg-stone-50 text-stone-600 hover:bg-stone-100'
-                                  }`}
-                                >
-                                  {isSpeaking ? <VolumeX size={12} /> : <Volume2 size={12} />}
-                                  {isSpeaking ? '停止播报' : '播报要点'}
-                                </button>
+                                <div className="flex flex-wrap items-center gap-2">
+                                  <button
+                                    onClick={() => handleSpeak(meeting.id, minutesResult.broadcast_script)}
+                                    className={`inline-flex items-center gap-1.5 rounded-lg border px-3 py-1.5 text-xs transition-colors ${
+                                      isSpeaking
+                                        ? 'border-red-200 bg-red-50 text-red-700 hover:bg-red-100'
+                                        : 'border-stone-200 bg-stone-50 text-stone-600 hover:bg-stone-100'
+                                    }`}
+                                  >
+                                    {isSpeaking ? <VolumeX size={12} /> : <Volume2 size={12} />}
+                                    {isSpeaking ? '停止' : '播报要点'}
+                                  </button>
+                                  {isSpeaking && !isPaused && (
+                                    <button
+                                      onClick={() => handlePauseSpeak(meeting.id)}
+                                      className="inline-flex items-center gap-1.5 rounded-lg border border-stone-200 bg-stone-50 px-3 py-1.5 text-xs text-stone-600 hover:bg-stone-100"
+                                    >
+                                      <Square size={12} />
+                                      暂停
+                                    </button>
+                                  )}
+                                  {isSpeaking && isPaused && (
+                                    <button
+                                      onClick={() => handleResumeSpeak(meeting.id)}
+                                      className="inline-flex items-center gap-1.5 rounded-lg border border-stone-200 bg-stone-50 px-3 py-1.5 text-xs text-stone-600 hover:bg-stone-100"
+                                    >
+                                      <Play size={12} />
+                                      继续
+                                    </button>
+                                  )}
+                                </div>
                               </div>
                               <pre className="max-h-48 overflow-auto whitespace-pre-wrap rounded-lg border border-stone-200 bg-stone-50 px-3 py-3 text-xs leading-6 text-stone-500">
                                 {minutesResult.broadcast_script}

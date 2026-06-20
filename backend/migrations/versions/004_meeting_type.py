@@ -9,7 +9,6 @@ Create Date: 2026-06-20 03:00:00.000000
 """
 from typing import Sequence, Union
 
-import sqlalchemy as sa
 from alembic import op
 
 # revision identifiers, used by Alembic.
@@ -20,7 +19,10 @@ depends_on: Union[str, Sequence[str], None] = None
 
 
 def upgrade() -> None:
-    op.add_column("meetings", sa.Column("meeting_type", sa.String(30), nullable=False, server_default="项目会议"))
+    conn = op.get_bind()
+    columns = {row[1] for row in conn.exec_driver_sql("PRAGMA table_info(meetings)").fetchall()}
+    if "meeting_type" not in columns:
+        conn.exec_driver_sql("ALTER TABLE meetings ADD COLUMN meeting_type VARCHAR(30) DEFAULT '项目会议'")
 
 
 def downgrade() -> None:

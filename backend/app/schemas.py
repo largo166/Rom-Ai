@@ -535,6 +535,23 @@ class ProjectDetail(ProjectOut):
     assignments: list[ProjectAssignmentOut] = []
 
 
+class OkfBundleFileOut(BaseModel):
+    name: str
+    path: str
+    exists: bool
+    size: int = 0
+    updated_at: Optional[str] = None
+    indexed_path: str = ""
+
+
+class OkfBundleOut(BaseModel):
+    project_id: str
+    generated: bool
+    root_path: str
+    updated_at: Optional[str] = None
+    files: list[OkfBundleFileOut] = []
+
+
 class HealthOut(BaseModel):
     status: str
     service: str
@@ -560,6 +577,11 @@ class SettingsStatusOut(BaseModel):
     data_dir: str = ""
     env_file: str = ""
     log_dir: str = ""
+    authorized_dirs: list[str] = []
+
+
+class AuthorizedDirUpdate(BaseModel):
+    path: str
 
 
 class DeepSeekSettingsUpdate(BaseModel):
@@ -575,6 +597,22 @@ class TencentMeetingSettingsUpdate(BaseModel):
 class KnowledgeScanRequest(BaseModel):
     path: str
     clear_existing: bool = False
+
+
+class ManagedPackageRequest(BaseModel):
+    source_path: str
+    project_id: Optional[str] = None
+    package_label: str = ""
+    copy_files: bool = True
+
+
+class ManagedPackageOut(BaseModel):
+    package_root: str
+    manifest_path: str
+    indexed_files: int
+    skipped_files: list[dict] = []
+    stats: dict = {}
+    recent_files: list[dict] = []
 
 
 class KnowledgeAskRequest(BaseModel):

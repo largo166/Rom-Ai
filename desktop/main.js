@@ -101,6 +101,12 @@ function ensureUserEnv() {
 function resolveBackendExe() {
   const candidates = [
     // 新 PyInstaller onedir 产物（extraResources -> backend）
+    path.join(process.resourcesPath, 'backend', 'rmo-ai-backend', 'rmo-ai-backend.exe'),
+    path.join(process.resourcesPath, 'backend', 'rmo-ai-backend.exe'),
+    path.join(process.resourcesPath, 'app.asar.unpacked', 'backend', 'rmo-ai-backend', 'rmo-ai-backend.exe'),
+    path.join(process.resourcesPath, 'app.asar.unpacked', 'backend', 'rmo-ai-backend.exe'),
+    path.join(__dirname, '..', 'backend_dist', 'rmo-ai-backend', 'rmo-ai-backend.exe'),
+    path.join(__dirname, '..', 'backend_dist', 'rmo-ai-backend.exe'),
     path.join(process.resourcesPath, 'backend', 'rom-ai-backend', 'rom-ai-backend.exe'),
     path.join(process.resourcesPath, 'backend', 'rom-ai-backend.exe'),
     path.join(process.resourcesPath, 'app.asar.unpacked', 'backend', 'rom-ai-backend', 'rom-ai-backend.exe'),

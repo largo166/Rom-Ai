@@ -32,6 +32,73 @@ ROM-AI 是一个本地优先的混合桌面项目：
 
 后端 exe 通过 Electron Builder `extraResources` 放入安装包真实资源目录，避免 asar 内部无法执行。
 
+## 块 8 · 打包与分发：便携版优先 + NSIS 缓存预置
+
+本轮新增一条出差优先交付路径：先产出免安装便携版，再把 NSIS 安装包作为缓存就绪后的增强产物。
+
+### 8.1 便携版（默认优先）
+
+当 NSIS 因 `winCodeSign`、`nsis`、`nsis-resources` 下载或权限问题失败时，先使用 Electron Builder 的 directory target：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\build-portable-win.ps1
+```
+
+该脚本复用：
+
+- `frontend\dist\`
+- `backend\dist\rmo-ai-backend\rmo-ai-backend.exe`
+- `desktop\node_modules\.bin\electron-builder.cmd`
+
+产物：
+
+```text
+release\
+  win-unpacked\
+    Rmo-AI.exe
+    resources\
+      backend\
+  ROM-AI-portable-win-unpacked.zip
+```
+
+`win-unpacked` 不走 NSIS，不需要安装器签名，也不依赖 `winCodeSign`。它适合出差、U 盘和内部分发：解压后直接双击 `Rmo-AI.exe`。
+
+### 8.2 缓存预置
+
+在网络可用时，预先喂满以下缓存：
+
+```text
+%LOCALAPPDATA%\electron\Cache
+%LOCALAPPDATA%\electron-builder\Cache\winCodeSign
+%LOCALAPPDATA%\electron-builder\Cache\nsis
+```
+
+建议加入杀软/EDR 白名单：
+
+```text
+%LOCALAPPDATA%\electron-builder\Cache
+%LOCALAPPDATA%\electron\Cache
+```
+
+并固定关闭代码签名自动发现：
+
+```bat
+set CSC_IDENTITY_AUTO_DISCOVERY=false
+```
+
+镜像：
+
+```text
+ELECTRON_MIRROR=https://npmmirror.com/mirrors/electron/
+ELECTRON_BUILDER_BINARIES_MIRROR=https://npmmirror.com/mirrors/electron-builder-binaries/
+```
+
+### 8.3 判断 EACCES
+
+- 如果日志路径包含 `electron-builder\Cache\winCodeSign` 或 `electron-builder\Cache\nsis`，优先怀疑杀软隔离或缓存目录权限。
+- 如果 `desktop\node_modules\.bin\electron-builder.cmd` 不存在，说明不是 NSIS 阶段失败，而是 desktop 依赖安装不完整，需要先恢复 `desktop\node_modules`。
+- 如果便携版成功但 NSIS 失败，优先交付 `release\win-unpacked` 或 `ROM-AI-portable-win-unpacked.zip`。
+
 ## 已改动的关键文件
 
 - `desktop\main.js`：启动后端、动态端口、GET 健康检查、日志、进程清理、错误提示。

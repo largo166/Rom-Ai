@@ -2,6 +2,14 @@ import pytest
 from pathlib import Path
 from unittest.mock import patch
 
+import app.authorized_dirs as authorized_dirs
+from app.authorized_dirs import (
+    AuthorizedDirError,
+    add_authorized_dir,
+    list_authorized_dirs,
+    remove_authorized_dir,
+    validate_authorized_dir_candidate,
+)
 from app.security import PathValidationError, get_allowed_roots, validate_path
 
 
@@ -13,6 +21,13 @@ class MockSettings:
         self.data_dir = kwargs.get("data_dir", "")
         self.upload_root = kwargs.get("upload_root", "")
         self.authorized_dirs = kwargs.get("authorized_dirs", [])
+
+
+@pytest.fixture()
+def isolated_authorized_dirs(tmp_path, monkeypatch):
+    config_path = tmp_path / "appdata" / "authorized_dirs.json"
+    monkeypatch.setattr(authorized_dirs, "CONFIG_PATH", config_path)
+    return config_path
 
 
 def test_path_traversal_blocked(tmp_path):
@@ -75,8 +90,8 @@ def test_no_allowed_roots_fail_closed(tmp_path):
         validate_path(str(safe_file), allowed_bases=[], must_exist=True)
 
 
-def test_get_allowed_roots_collects_configured_dirs(tmp_path):
-    """get_allowed_roots 应汇总所有已配置目录和用户授权目录"""
+def test_get_allowed_roots_collects_system_and_user_authorized_dirs(tmp_path, isolated_authorized_dirs):
+    """get_allowed_roots 应汇总系统受管目录和 AppData 用户授权目录"""
     vault = tmp_path / "vault"
     vault.mkdir()
     data = tmp_path / "data"
@@ -90,21 +105,64 @@ def test_get_allowed_roots_collects_configured_dirs(tmp_path):
         default_vault_path=str(vault),
         data_dir=str(data),
         upload_root=str(upload),
-        authorized_dirs=[str(extra), ""],  # 空字符串应被跳过
+        authorized_dirs=[str(tmp_path / "ignored")],
     )
+    add_authorized_dir(extra)
 
     with patch("app.config.get_settings", return_value=settings):
         roots = get_allowed_roots()
 
-    assert vault.resolve() in roots
     assert data.resolve() in roots
     assert upload.resolve() in roots
     assert extra.resolve() in roots
+    assert vault.resolve() not in roots
 
 
-def test_get_allowed_roots_empty_when_nothing_configured():
+def test_get_allowed_roots_empty_when_nothing_configured(isolated_authorized_dirs):
     """没有任何目录配置时返回空列表"""
     settings = MockSettings()
     with patch("app.config.get_settings", return_value=settings):
         roots = get_allowed_roots()
     assert roots == []
+
+
+def test_authorized_dirs_add_remove_and_persist(tmp_path, isolated_authorized_dirs):
+    """用户授权目录应写入本机 AppData 配置，删除后立即移出白名单"""
+    root = tmp_path / "资料根"
+    root.mkdir()
+
+    assert list_authorized_dirs() == []
+    assert add_authorized_dir(root) == [str(root.resolve())]
+    assert list_authorized_dirs() == [str(root.resolve())]
+    assert isolated_authorized_dirs.exists()
+
+    assert remove_authorized_dir(root) == []
+    assert list_authorized_dirs() == []
+
+
+def test_user_authorized_dir_controls_validate_path(tmp_path, isolated_authorized_dirs):
+    """外部文件夹必须先授权，移除授权后再次 fail-closed"""
+    project_root = tmp_path / "project"
+    project_root.mkdir()
+    file_path = project_root / "brief.txt"
+    file_path.write_text("brief", encoding="utf-8")
+    settings = MockSettings()
+
+    with patch("app.config.get_settings", return_value=settings):
+        with pytest.raises(PathValidationError):
+            validate_path(str(file_path), allowed_bases=get_allowed_roots(), must_exist=True)
+
+    add_authorized_dir(project_root)
+    with patch("app.config.get_settings", return_value=settings):
+        assert validate_path(str(file_path), allowed_bases=get_allowed_roots(), must_exist=True) == file_path.resolve()
+
+    remove_authorized_dir(project_root)
+    with patch("app.config.get_settings", return_value=settings):
+        with pytest.raises(PathValidationError):
+            validate_path(str(file_path), allowed_bases=get_allowed_roots(), must_exist=True)
+
+
+def test_rejects_overly_broad_authorized_dirs(isolated_authorized_dirs):
+    """拒绝授权用户主目录等过宽路径"""
+    with pytest.raises(AuthorizedDirError):
+        validate_authorized_dir_candidate(Path.home())

@@ -31,7 +31,7 @@ function getCardTypeLabel(type: string) {
   if (t.includes('task_breakdown') || t.includes('任务拆解')) return '任务拆解';
   if (t.includes('technical_focus') || t.includes('技术重点')) return '技术重点';
   if (t.includes('meeting_agenda') || t.includes('会议议程')) return '会议议程';
-  if (t.includes('ppt_outline') || t.includes('ppt')) return 'PPT结构';
+  if (t.includes('ppt_outline') || t.includes('ppt')) return 'PPT 大纲';
   if (t.includes('focus')) return '技术重点';
   return type || 'AI成果';
 }
@@ -65,7 +65,7 @@ export function AiResultsTab({ project }: Props) {
   return (
     <div className="space-y-4">
       <div className="flex items-center justify-between">
-        <h2 className="text-sm font-semibold text-white">AI技能卡片执行结果</h2>
+        <h2 className="text-sm font-semibold text-white">AI 代理成果卡</h2>
         <span className="text-xs text-zinc-500">共 {skillCards.length} 条</span>
       </div>
 
@@ -74,7 +74,7 @@ export function AiResultsTab({ project }: Props) {
           <Sparkles size={36} className="mx-auto mb-4 text-zinc-600" />
           <h3 className="mb-2 text-sm font-semibold text-white">暂无AI成果</h3>
           <p className="text-sm text-zinc-500">
-            运行项目启动分析或从AI代理页面执行技能卡片后，结果会显示在这里。
+            运行项目启动分析，或在 AI 代理输入目标后，项目研判、会议助理、任务编排、PPT 大纲、AI 生图和知识复用成果会显示在这里。
           </p>
         </div>
       ) : (
