@@ -14,9 +14,14 @@ desktop/node_modules/
 .venv/
 backend/.venv/
 backend/.venv-win/
+backend/.venv-py39/
 backend/.venv-test-data/
 backend/.venv-test-data2/
 backend/.venv-test-exe/
+.build-home/
+.build-appdata/
+.build-*/
+.npm-cache/
 
 # Build outputs
 dist/
@@ -31,6 +36,12 @@ __pycache__/
 *.log
 .pytest_cache/
 .mypy_cache/
+_validation-run-data*/
+logs/*
+!logs/.gitkeep
+
+# Runtime manifests (contain local user paths)
+backend/archive_manifests/
 
 # OS and editor files
 .DS_Store
