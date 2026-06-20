@@ -1,0 +1,309 @@
+version: 1
+
+# ── 文件范围 ──────────────────────────────────
+# 留空 include = 不设白名单，靠 exclude 排除构建产物和数据文件
+scope:
+  include: []
+  exclude:
+    - "node_modules/**"
+    - "dist/**"
+    - "build/**"
+    - "release/**"
+    - "__pycache__/**"
+    - ".venv/**"
+    - "*.pyc"
+    - "backend/archive_manifests/**"
+    - "backend/backend_dist/**"
+    - "frontend/package-lock.json"
+    - "desktop/package-lock.json"
+    - "desktop/build/**"
+    - "frontend/public/**"
+    - "logs/**"
+    - "backend/knowledge_assets/**"
+
+# ── RepoWiki 配置 ─────────────────────────────
+repowiki:
+  # 全局预设模板：architecture = 代码/架构分析
+  template: "architecture"
+
+  notes:
+    - text: >
+        本 wiki 是"导航 + 模块地图"，面向未来改代码的 AI 智能体，不是逐文件流水账。
+        护栏与暂缓清单的权威来源始终是仓库根目录 CLAUDE.md / 执行纲要，真出冲突以 CLAUDE.md 为准。
+        wiki 指向 CLAUDE.md 而不是替代它。
+
+    - text: >
+        五板块归并规则：收件箱已并入知识库（inbox 路由仍存在，但前端入口重定向到
+        /knowledge?tool=local-folder）；会议/任务归属项目中心；数字网络平台和管理驾驶舱
+        为暂缓占位。写模块职责时按这五板块 + 地基组织，不要按目录结构罗列。
+
+    - text: >
+        OKF → "数据链接"命名规则：用户可见界面和前端文案不出现 OKF 术语，统一叫"数据链接"或
+        "项目资料整理包"；内部 API/变量名（generate_project_okf_bundle、OKF_BUNDLE_FILES、
+        _okf_root 等）保留原名不改动。改代码时不要把内部 OKF 命名"修正"成数据链接。
+
+    - text: >
+        代码中的占位必须标注"暂缓占位"，不得写成已实现功能：
+        (1) DigitalEmployee / TeamMember 模型存在、有种子数据、有路由，但自进化/自动调度/
+        负载均衡逻辑未实现——暂缓占位；
+        (2) routes/designers.py 和 routes/team.py 存在但数字网络平台 UI/逻辑暂缓——暂缓占位；
+        (3) routes/boss.py 存在并返回数据，但完整版老板驾驶舱 UI/逻辑暂缓——暂缓占位；
+        (4) designer_profile 等字段属于暂缓占位；
+        (5) Chroma+BGE-M3 不打进安装包，降为可选下载——暂缓占位。
+
+    - text: >
+        闭环数据流（改代码时必须理解的主线）：
+        文件进 → 受管资料包(managed_package.py，非破坏性复制+Markdown摘要) →
+        FTS5 索引(retrieval.py，知识库分块入库) → 项目绑定(ProjectFile关联) →
+        启动分析(analysis.py，DeepSeek研判+技术重点+任务拆解) →
+        会议五段式+诉求转译(execution.py summarize_meeting，黑话词典增强) →
+        跨项目经验(cross_project.py，source-first检索) →
+        AI代理成果卡(execution.py _execute_skill，技能执行+成果卡) →
+        人工确认回流知识库(context.py deposit_*_to_knowledge)。
+        每个环节的产出经人工确认后才沉淀回知识库，AI不自动回流。
+
+    - text: >
+        SQLite 并发安全三件套（禁止用"换 Postgres"治并发锁）：
+        WAL 模式 + 写操作串行化锁(serialized_write) + 撞锁指数退避重试(retry_on_lock)。
+        Alembic 迁移替代手工 ALTER TABLE；_ensure_sqlite_columns() 已废弃保留供回滚参考。
+
+    - text: >
+        技能卡不是占位按钮：必须能被左侧对话框自动触发并产出成果卡；所有技能逻辑、Prompt 模板、
+        执行链路、输出 schema 必须内置在 Rmo-AI 本体，安装后可离线独立执行。多 Skill 不自动串跑：
+        下游（PPT大纲→概念文案→生图提示词→AI生图）做成成果卡上的"建议下一步"一键入口，
+        由用户逐步触发。
+
+    - text: >
+        Mock 模式：未配置 DEEPSEEK_API_KEY 时自动降级为 Mock 模式，保证开箱即用；
+        生图未配置 key 时提示配置，绝不伪造图片结果。
+        API Key 只进本机配置（.env 或设置页），绝不写进技能卡源码/body/任何会同步的文件。
+
+    - text: >
+        前端通过 runtime.ts 支持 Electron 注入的动态后端地址（非硬编码 localhost:8000）；
+        桌面端 Electron main.js 负责启动后端 exe、端口探测(8000→8010-8049)、健康检查轮询、
+        自动更新(electron-updater)。用户数据写入 %APPDATA%\ROM-AI\，不写安装目录。
+
+  documents:
+    # ── 地基 ──
+    - title: "地基与三接缝"
+      goal: "路径安全、JSON安全、数据库并发、变更事件引擎、三道接缝接口定义——改任何写操作或文件操作前必读"
+      parent: ""
+      template: |
+        ## 职责边界
+        ## 核心文件清单
+        ## 三道接缝接口
+        ## 护栏规则（指向 CLAUDE.md §3）
+        ## 已废弃但保留的代码
+
+    - title: "路径安全与授权目录"
+      goal: "validate_path 完整链路、authorized_dirs 出厂为空机制、symlink 逃逸防御、security.py 与 safety.py 的关系"
+      parent: "地基与三接缝"
+      hints:
+        - "security.py 的 validate_path 是路由层使用的入口；safety.py 也有 validate_path 但职责更偏 JSON 安全和 commit 重试"
+        - "authorized_dirs.json 出厂不存在即空列表；load_authorized_dirs() 返回空时不影响系统目录(BASE_DIR/upload_root/temp)的访问"
+        - "_blocked_roots() 硬编码拒绝授权 Home/Desktop/Documents/Downloads/C:/Windows 等过宽路径"
+
+    - title: "JSON安全与数据库并发"
+      goal: "json_safety.py(safe_json_parse/safe_json_dump) 与 safety.py(safe_json_loads/safe_json_dumps) 的关系、serialized_write、retry_on_lock、WAL 配置"
+      parent: "地基与三接缝"
+      hints:
+        - "json_safety.py 是新版（带 field_name 参数用于错误追踪），safety.py 是旧版兼容入口"
+        - "所有 JSON 字段（content_json/dependencies/todos/mindmap_json/next_actions_json/sync_trace_json/skills/tags）必须走安全解析"
+
+    - title: "变更事件引擎"
+      goal: "ProjectChangeEvent 模型、event_engine.py 的 emit/get_unconsumed/mark_consumed、增量分析驱动机制"
+      parent: "地基与三接缝"
+
+    # ── 项目中心 ──
+    - title: "项目管理中心"
+      goal: "项目建档、概览指挥台、会议纪要链路、任务管理、上下文数据链接——项目现场的完整模块地图"
+      parent: ""
+
+    - title: "项目概览指挥台"
+      goal: "Phase 3 概览壳、_aggregate_risks 风险聚合、最近会议摘要、OKF 数据链接包生成(context.py generate_project_okf_bundle)"
+      parent: "项目管理中心"
+      hints:
+        - "概览只展示关键判断，细节进对应 tab——不要在概览页堆全量数据"
+
+    - title: "会议纪要完整链路"
+      goal: "五段式纪要(execution.py summarize_meeting)、甲方诉求转译、黑话词典(meeting_engine.py SEED_JARGON_DICT)、腾讯会议集成(tencent.py)、音频转写(audio.py)、待办回流为 ProjectTask"
+      parent: "项目管理中心"
+      hints:
+        - "内外双版：对内研判版与对外纪要版分离；每条诉求转译锚定转写原话+时间点"
+        - "AI出草案、人工审定——纪要状态流转 scheduled→summarized"
+
+    - title: "项目上下文与数据链接"
+      goal: "context.py 上下文包生成(project-context/{id}/)、OKF bundle 7文件(project.md/brief.md/site.md/meetings.md/judgement.md/assets.md/agent_context.md)、知识库沉淀、变更台账(log.md)、上下文目录(index.md)"
+      parent: "项目管理中心"
+      hints:
+        - "用户可见叫'数据链接'，内部 API 名保留 OKF——不要改内部命名"
+
+    # ── 知识库 ──
+    - title: "设计知识库"
+      goal: "受管资料包、FTS5检索、跨项目经验、知识增强——知识库为中枢的底座模块地图"
+      parent: ""
+
+    - title: "受管资料包与文件归档"
+      goal: "managed_package.py(非破坏性复制+Markdown摘要+manifest)、archive_engine.py(dry-run/manifest/可撤销)、inbox.py(分类/归档/归档即入库)"
+      parent: "设计知识库"
+      hints:
+        - "归档红线：可逆/dry-run/默认复制不原地移动/目标走 validate_path/带 manifest+一键撤销"
+        - "managed_package 是非破坏性 intake：源文件夹只读，ROM-AI 创建自己的受管副本"
+
+    - title: "FTS5 检索引擎"
+      goal: "retrieval.py FTS5/BM25 实现、RetrievalEngine 接缝(interfaces.py)、init_fts5/rebuild_fts_index/sync_chunk_to_fts、降级搜索(_fallback_search ilike)"
+      parent: "设计知识库"
+      hints:
+        - "FTS5 是 Phase 6 升级，替换了 ilike；Chroma+BGE-M3 降为可选下载、不打进安装包"
+        - "判断类输出必须先检索知识库、基于真实材料生成、带出处(RAG)；简单格式化类不强制 RAG"
+
+    - title: "跨项目经验与知识增强"
+      goal: "cross_project.py(source-first检索，每条推荐必须带来源路径)、knowledge_enhancer.py(触发点主动推荐：analysis/okf_refresh/meeting/review/ppt/archive)"
+      parent: "设计知识库"
+      hints:
+        - "cross_project 是 source-first：无检索来源=不返回条目，绝不编造甲方偏好/周期/技术建议"
+
+    # ── AI 代理 ──
+    - title: "AI 设计代理"
+      goal: "Orchestrator调度器、技能体系、成果卡、生图提示词——AI代理是动作层的模块地图"
+      parent: ""
+
+    - title: "技能体系与 Orchestrator"
+      goal: "skill_manifest.py 11技能定义(dataclass)、orchestrator.py 意图分类+Prompt构建+成果卡、execution.py _execute_skill 技能执行+回写、run_agent_chat 对话入口"
+      parent: "AI 设计代理"
+      hints:
+        - "技能必须围绕当前项目；'做任务、不看项目'是边界违规"
+        - "成果卡 actions: view/copy/writeback/deepen；suggested_next 是建议下一步一键入口"
+        - "Orchestrator 有两套技能定义：orchestrator.py 的 SKILL_MANIFEST(list) 和 skill_manifest.py 的 BUILTIN_SKILLS(dataclass)，后者是权威"
+
+    - title: "生图提示词与多视角"
+      goal: "image_prompting.py build_multiview_image_prompts、image_provider.py 生图调用、_generate_image_asset 未配置key降级、settings.image_provider 默认 huashu"
+      parent: "AI 设计代理"
+      hints:
+        - "生图未配置 key 时返回 status=not_configured + 提示消息，绝不伪造图片结果"
+
+    # ── 横切 ──
+    - title: "闭环数据流"
+      goal: "从文件进到知识库回流的完整闭环路径，各环节输入输出和沉淀点，改任何环节前必读"
+      parent: ""
+      template: |
+        ## 闭环主线（一句话）
+        ## 各环节详解
+        ### 1. 文件进
+        ### 2. 受管资料包
+        ### 3. FTS5 索引
+        ### 4. 项目绑定
+        ### 5. 启动分析
+        ### 6. 会议五段式
+        ### 7. 跨项目经验
+        ### 8. AI代理成果卡
+        ### 9. 人工确认回流
+        ## 人工确认门（AI不自动回流）
+
+    - title: "护栏与暂缓边界"
+      goal: "硬规则清单和暂缓清单，权威来源 CLAUDE.md §1-§4，改代码前必读，遇到冲突以 CLAUDE.md 为准"
+      parent: ""
+      template: |
+        ## 硬规则（护栏 — CLAUDE.md §3 五条红线，必须全部列出不得遗漏）
+        ### 1. 归档红线
+        ### 2. 转译红线
+        ### 3. 数据库红线
+        ### 4. 安全红线
+        ### 5. 运行时/密钥红线
+        ## 暂缓清单（OFF — CLAUDE.md §2，逐项列出）
+        ## 留接缝清单（留接口不实现 — CLAUDE.md §2）
+        ## 两个纠偏（§4 别碰：不许换Postgres治锁/不引入平台叙事）
+        ## 工作方法铁律（CLAUDE.md §5）
+        ## 权威来源声明
+      hints:
+        - "§3 五条红线必须全部写出，不得只写2-3条：(1)归档 (2)转译 (3)数据库 (4)安全 (5)运行时/密钥"
+        - "留接缝清单(CLAUDE.md §2)：StorageBackend(收编cloud.py)、RetrievalEngine(v1用FTS5重模型留接口)、get_current_principal、VisionProvider(参考图视觉分类)、ImageGenerationProvider(生图)、TTS接口、黑话词典资产化、POST /api/projects/{id}/agent-chat完整端点、数字网络/老板舱的数据模型字段"
+        - "两个纠偏(CLAUDE.md §4)：①SQLite并发锁不许用换Postgres治(用WAL+写串行+重试) ②不引入商用化时间估算等平台叙事"
+
+    - title: "桌面打包与运行时"
+      goal: "Electron main.js(后端exe启动/端口探测/健康检查/自动更新)、preload.js(桌面能力暴露)、desktop_server.py(桌面后端入口)、用户数据目录(%APPDATA%\\ROM-AI\\)"
+      parent: ""
+      hints:
+        - "运行时生命周期：Electron 启动后端 exe(windowsHide:true) → 端口探测(8000优先→8010-8049回退) → 健康检查轮询(/api/health) → 注入后端地址到前端(window.romAI) → 窗口关闭时终止后端子进程"
+        - "ensureUserEnv 在 %APPDATA%\\ROM-AI\\data\\ 首次创建 .env；desktop_server.py 读取 AppData 环境变量(DATA_DIR/LOG_DIR/PORT)；config.py 去除个人路径默认值"
+        - "preload.js 暴露 window.romAI={apiBase, openDirectory, version}；前端 runtime.ts 通过 window.romAI.apiBase 获取动态后端地址，fallback 到 127.0.0.1:8001"
+        - "自动更新(electron-updater)需配置 publish 仓库；当前未签名安装包可能触发系统安全提示"
+
+    - title: "打包分发风险与便携版策略"
+      goal: "packaging_plan.md 的8个风险点+known_issues.md的4个已知问题+便携版优先策略+缓存预置+EACCES判断+发布注意事项——打包分发前必读"
+      parent: "桌面打包与运行时"
+      hints:
+        - "8个打包风险(packaging_plan.md)：①API Key泄漏(.env不打包,Git跟踪则构建失败) ②端口冲突(8000→8010-8049回退) ③后端exe路径失效(兼容开发路径+extraResources安装路径) ④安装目录写入失败(数据库/上传/配置/日志全走AppData) ⑤PyInstaller隐藏依赖(显式collect FastAPI/Uvicorn/Pydantic/SQLAlchemy/Office/PDF) ⑥控制台黑框(windowsHide:true) ⑦关闭残留进程(Electron退出前终止子进程) ⑧Electron Builder下载阻塞(默认设镜像)"
+        - "便携版优先：NSIS因winCodeSign/nsis下载失败时，先出win-unpacked(build-portable-win.ps1)，解压即用，不需要安装器签名"
+        - "缓存预置：%LOCALAPPDATA%\\electron\\Cache + electron-builder\\Cache\\winCodeSign/nsis/nsis-resources；镜像 ELECTRON_MIRROR/electron-builder-binaries；CSC_IDENTITY_AUTO_DISCOVERY=false"
+        - "EACCES判断：日志路径含Cache→杀软隔离/权限问题；electron-builder.cmd不存在→desktop依赖不完整；便携版成功但NSIS失败→交付win-unpacked"
+        - "发布注意：不打包backend/.env/data/uploads/C__/日志；优先提供Setup.exe+README_RUN.md；不内置开发机数据库作演示数据"
+        - "4个已知问题(known_issues.md)：未签名→安全提示；未配DeepSeek Key→mock模式；bundle size warning；on_event/datetime.utcnow()弃用警告；杀软拦截PyInstaller exe"
+
+    # ── 暂缓占位（必须标注）──
+    - title: "数字网络平台（暂缓占位）"
+      goal: "路由和模型存在但UI/逻辑暂缓——本页只描述占位状态，不得描述为已实现功能"
+      parent: ""
+      template: |
+        ## 状态：暂缓占位（CLAUDE.md §2 OFF）
+        ## 已有代码（路由/模型/种子数据）
+        ## 未实现逻辑
+        ## 暂缓原因
+        ## 留接缝内容
+
+    - title: "管理驾驶舱（暂缓占位）"
+      goal: "boss路由存在但完整版暂缓——本页只描述占位状态，当前为只读admin视角"
+      parent: ""
+      template: |
+        ## 状态：暂缓占位（CLAUDE.md §2 OFF）
+        ## 已有代码（路由/模型）
+        ## 未实现逻辑
+        ## 暂缓原因
+        ## 留接缝内容
+
+# ── 知识卡配置 ─────────────────────────────────
+knowledgecard:
+  notes:
+    - text: >
+        四类知识卡：
+        ①模块职责卡——每个 service/route 干什么、输入输出、依赖谁、属于哪个板块；
+        ②架构决策卡——五板块归并(收件箱并入知识库/会议任务归项目中心)、三接缝、
+        闭环数据流、OKF→数据链接命名(用户可见无OKF/内部API名保留)；
+        ③护栏卡(硬规则，CLAUDE.md §3 五条红线，必须齐全不得遗漏)——
+        (a)归档红线:可逆/dry-run/默认复制不原地移动/目标走validate_path/带manifest+一键撤销；
+        (b)转译红线:对内研判版与对外纪要版分离/每条锚定转写原话+时间点/AI出草案人工审定；
+        (c)数据库红线:Alembic迁移可回滚/不裸跑ALTER TABLE；
+        (d)安全红线:后端校验是边界前端只是体验/validate_path=resolve→白名单is_relative_to→拒绝symlink逃逸→空目录fail closed；
+        (e)运行时密钥红线:技能能力内置可离线/key只进本机永不进卡仓库同步文件/生图未配key提示配置绝不伪造；
+        ④暂缓边界卡(CLAUDE.md §2 OFF完整清单)——网络平台UI/逻辑只占位、数字员工自进化/调度/负载封存、
+        老板驾驶舱完整版暂缓、Chroma+BGE-M3可选下载不打进安装包、
+        PostgreSQL/JWT多租户/对象存储/服务器CORS/外置扫描任务状态暂缓、
+        知识图谱可视化/自动生成全部方法库页面/个人训练界面周报17模块后台暂缓、
+        前端全局状态管理重构(React Query/Zustand)暂缓。
+
+    - text: >
+        护栏卡和暂缓边界卡是整份wiki最值钱、也最容易被工具写错的部分。
+        工具大概率会把网络平台/数字员工的stub写成"功能"，必须把它改回"暂缓占位"。
+        审卡时重点检查：DigitalEmployee自进化→应写暂缓；boss完整版→应写暂缓；
+        designer_profile→应写暂缓占位；Chroma+BGE-M3→应写可选下载不打进安装包。
+
+    - text: >
+        护栏与暂缓的权威来源始终是 CLAUDE.md / 执行纲要，不是从代码猜测。
+        代码里有实现不等于"本轮做"，代码里的占位不等于"已实现"。
+        遇到护栏/暂缓相关问题，卡片应引导读者去读 CLAUDE.md 对应章节（§1第一原则、
+        §2范围边界、§3高风险红线、§4风险分级、§5工作方法）。
+
+    - text: >
+        模块职责卡要写清输入输出和依赖关系，让改代码的AI快速定位"改这个文件会影响谁"。
+        格式：模块名 → 职责一句话 → 输入 → 输出 → 依赖(上游) → 被依赖(下游) → 所属板块。
+
+    - text: >
+        架构决策卡要解释"为什么这样归并"，不是只列结果。收件箱并入知识库是因为
+        归档即入库、检索统一；会议/任务归项目中心是因为它们是项目现场的产物。
+        三接缝（身份/存储/检索）是桌面版到平台版的预留扩展点，当前只有本地实现。
+
+    - text: >
+        security.py 的 validate_path 是路由层使用的路径安全入口（含 PathValidationError、
+        get_allowed_roots）；safety.py 也有 validate_path 但更偏 JSON 安全和 commit 重试。
+        json_safety.py 是新版 JSON 安全工具（带 field_name 参数），safety.py 的
+        safe_json_loads/dumps 是旧版兼容。写模块职责卡时需区分这两组工具。
